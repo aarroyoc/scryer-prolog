@@ -1741,6 +1741,7 @@ dependencies = [
  "futures",
  "fxhash",
  "git-version",
+ "gmp-mpfr-sys",
  "hostname",
  "hyper",
  "hyper-tls",

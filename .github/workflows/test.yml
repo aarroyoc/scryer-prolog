@@ -52,3 +52,11 @@ jobs:
           crate: cargo-msrv
       - name: Verify MSRV
         run: cargo msrv --verify
+  win:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+      - name: Build cross-compile MinGW
+        run: docker build -t scryer-prolog-windows -f .github/workflows/Dockerfile.win .
+        

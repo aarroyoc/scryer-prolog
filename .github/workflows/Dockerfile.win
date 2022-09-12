@@ -1,0 +1,11 @@
+FROM alpine:3.16
+
+RUN apk add --no-cache rustup diffutils m4 make mingw-w64-gcc
+
+RUN rustup-init -y -t x86_64-pc-windows-gnu && source $HOME/.cargo/env
+
+ENV PATH "$PATH:$HOME/.cargo/bin"
+
+COPY . .
+
+RUN /root/.cargo/bin/cargo build --target=x86_64-pc-windows-gnu --release

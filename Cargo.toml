@@ -49,6 +49,7 @@ ordered-float = "2.6.0"
 phf = { version = "0.9",  features = ["macros"] }
 ref_thread_local = "0.0.0"
 rug = { version = "1.15.0", optional = true }
+gmp-mpfr-sys = { features = ["force-cross"] }
 rustyline = "9.0.0"
 ring = "0.16.13"
 ripemd160 = "0.8.0"

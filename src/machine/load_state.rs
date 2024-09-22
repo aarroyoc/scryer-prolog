@@ -8,7 +8,6 @@ use crate::parser::ast::*;
 
 use fxhash::FxBuildHasher;
 use indexmap::IndexSet;
-pub use ref_thread_local::RefThreadLocal;
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -447,7 +446,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
     }
 
     pub(super) fn remove_replaced_in_situ_module(&mut self, module_name: Atom) {
-        let mut removed_module = match self.wam_prelude.indices.modules.remove(&module_name) {
+        let mut removed_module = match self.wam_prelude.indices.modules.swap_remove(&module_name) {
             Some(module) => module,
             None => return,
         };
@@ -513,7 +512,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
     }
 
     pub(super) fn remove_module_exports(&mut self, module_name: Atom) {
-        let removed_module = match self.wam_prelude.indices.modules.remove(&module_name) {
+        let removed_module = match self.wam_prelude.indices.modules.swap_remove(&module_name) {
             Some(module) => module,
             None => return,
         };
@@ -543,7 +542,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                     }
                     ModuleExport::OpDecl(op_decl) => {
                         let op_dir_value_opt = op_dir
-                            .remove(&(op_decl.name, fixity(op_decl.op_desc.get_spec() as u32)));
+                            .swap_remove(&(op_decl.name, op_decl.op_desc.get_spec().fixity()));
 
                         if let Some(op_desc) = op_dir_value_opt {
                             retraction_info.push_record(op_retractor(*op_decl, op_desc));
@@ -1004,7 +1003,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
 
         self.reset_in_situ_module(module_decl.clone(), &listing_src);
 
-        let mut module = match self.wam_prelude.indices.modules.remove(&module_name) {
+        let mut module = match self.wam_prelude.indices.modules.swap_remove(&module_name) {
             Some(mut module) => {
                 module.listing_src = listing_src;
                 module
@@ -1046,7 +1045,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
     }
 
     pub(super) fn import_module(&mut self, module_name: Atom) -> Result<(), SessionError> {
-        if let Some(module) = self.wam_prelude.indices.modules.remove(&module_name) {
+        if let Some(module) = self.wam_prelude.indices.modules.swap_remove(&module_name) {
             let payload_compilation_target = self.payload.compilation_target;
 
             match &payload_compilation_target {
@@ -1102,7 +1101,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
         module_name: Atom,
         exports: IndexSet<ModuleExport>,
     ) -> Result<(), SessionError> {
-        if let Some(module) = self.wam_prelude.indices.modules.remove(&module_name) {
+        if let Some(module) = self.wam_prelude.indices.modules.swap_remove(&module_name) {
             let payload_compilation_target = self.payload.compilation_target;
 
             let result = match &payload_compilation_target {
@@ -1163,7 +1162,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                     ListingSource::File(filename, path_buf),
                 )
             }
-            ModuleSource::Library(library) => match LIBRARIES.borrow().get(&*library.as_str()) {
+            ModuleSource::Library(library) => match libraries::get(&library.as_str()) {
                 Some(code) => {
                     if let Some(module) = self.wam_prelude.indices.modules.get(&library) {
                         if let ListingSource::DynamicallyGenerated = &module.listing_src {
@@ -1245,7 +1244,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                     ListingSource::File(filename, path_buf),
                 )
             }
-            ModuleSource::Library(library) => match LIBRARIES.borrow().get(&*library.as_str()) {
+            ModuleSource::Library(library) => match libraries::get(&library.as_str()) {
                 Some(code) => {
                     if self.wam_prelude.indices.modules.contains_key(&library) {
                         return self.import_qualified_module(library, exports);

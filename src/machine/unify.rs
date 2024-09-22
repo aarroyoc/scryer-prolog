@@ -7,7 +7,7 @@ use crate::types::*;
 
 use std::ops::{Deref, DerefMut};
 
-use derive_deref::*;
+use derive_more::*;
 use fxhash::FxBuildHasher;
 use indexmap::IndexSet;
 use num_order::NumOrd;
@@ -584,6 +584,7 @@ fn bind_with_occurs_check<U: Unifier>(unifier: &mut U, r: Ref, value: HeapCellVa
 }
 
 #[derive(Deref, DerefMut)]
+#[deref(forward)]
 pub(crate) struct DefaultUnifier<'a> {
     machine_st: &'a mut MachineState,
 }

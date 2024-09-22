@@ -8,7 +8,6 @@ use crate::types::*;
 pub enum FunctorElement {
     AbsoluteCell(HeapCellValue),
     Cell(HeapCellValue),
-    // Literal(Literal),
     InnerFunctor(u64, Vec<FunctorElement>),
     String(u64, String),
 }
@@ -22,7 +21,7 @@ macro_rules! count {
 // core macros
 
 /*
- * functor! is much more declarative now, with fewer effects and more
+ * functor! is more declarative now, with fewer effects and more
  * work done at compile time using const functions. With these
  * advantages come new quirks: expressions must generally be wrapped
  * in round parentheses for rustc to parse them. See the tests module
@@ -82,17 +81,6 @@ macro_rules! build_functor {
                         1 + $res_len,
                         [$($subfunctor),*])
     });
-    /*
-    ([literal($e:expr) $(, $dt:ident($($value:tt),*))*],
-     [$($res:expr),*],
-     $res_len:expr,
-     [$($subfunctor:expr),*]) => ({
-         build_functor!([$($dt($($value),*)),*],
-                        [$($res, )* FunctorElement::Literal($e)],
-                        1 + $res_len,
-                        [$($subfunctor),*])
-    });
-    */
     ([number($n:expr, $arena:expr) $(, $dt:ident($($value:tt),*))*],
      [$($res:expr),*],
      $res_len:expr,
@@ -139,10 +127,7 @@ macro_rules! build_functor {
                        1 + $res_len,
                        [$($subfunctor),*])
     });
-    ([functor($stub:expr) $(, $dt:ident($($value:tt),*))*],
-     [$($res:expr),*],
-     $res_len:expr,
-     [$($subfunctor:expr),*]) => ({
+    ([functor($stub:expr) $(, $dt:ident($($value:tt),*))*], [$($res:expr),*], $res_len:expr, [$($subfunctor:expr),*]) => ({
          let result_len = 1u64 + count!($($dt)*) + $res_len;
          let inner_functor_size = cell_index!(Heap::compute_functor_byte_size(&$stub)) as u64;
 
@@ -223,6 +208,7 @@ pub(crate) fn variadic_functor(
 }
 
 #[cfg(test)]
+#[allow(unused_parens)]
 mod tests {
     use super::*;
     use FunctorElement::*;

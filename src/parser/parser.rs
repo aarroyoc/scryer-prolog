@@ -241,23 +241,6 @@ pub fn read_tokens<R: CharRead>(lexer: &mut LexerParser<R>) -> Result<(Vec<Token
     Ok((tokens, term_size))
 }
 
-/*
-fn atomize_term(atom_tbl: &AtomTable, term: &Term) -> Option<Atom> {
-    match term {
-        Term::Literal(_, ref c) => c.to_atom(),
-        _ => None,
-    }
-}
-
-fn atomize_constant(atom_tbl: &AtomTable, c: Literal) -> Option<Atom> {
-    match c {
-        Literal::Atom(ref name) => Some(*name),
-        Literal::Char(c) => Some(AtomTable::build_with(atom_tbl, &c.to_string())),
-        _ => None,
-    }
-}
-*/
-
 pub(crate) fn as_partial_string(
     heap: &impl SizedHeap,
     head: HeapCellValue,
@@ -303,11 +286,6 @@ pub(crate) fn as_partial_string(
                            break;
                        }
                    }
-                   /*
-                   (HeapCellValueTag::Char, c) => {
-                       string.push(c);
-                   }
-                   */
                    _ => {
                        return None;
                    }
@@ -320,13 +298,6 @@ pub(crate) fn as_partial_string(
                string += pstr;
                tail = heap[tail_loc];
            }
-           /*
-           (HeapCellValueTag::CStr, cstr_atom) => {
-               string += &*cstr_atom.as_str();
-               tail = empty_list_as_cell!();
-               break;
-           }
-           */
            (HeapCellValueTag::AttrVar | HeapCellValueTag::Var, h) => {
                if heap[h] != tail {
                    tail = heap[h];
@@ -417,10 +388,6 @@ impl<'a> Parser<'a> {
     }
 
     fn push_unary_op(&mut self, op: TokenDesc, operand: TokenDesc, spec: Specifier) {
-        // if is_postfix!(assoc) {
-        //     mem::swap(&mut op, &mut operand);
-        // }
-
         if let TokenDesc {
             tt: TokenType::Term { heap_loc: arg1 },
             ..
@@ -520,18 +487,6 @@ impl<'a> Parser<'a> {
                     TokenType::Term { heap_loc: pstr_cell }
                 }
             }
-            /*
-            Token::Literal(Literal::Char(c)) => {
-                // soon this will be gone due to chars being folded
-                // into atoms
-                self.terms.push(atom_as_cell!(atomize_literal(
-                    &self.lexer.machine_st.atom_tbl,
-                    Literal::Char(c),
-                ).unwrap()));
-
-                TokenType::Term { heap_loc }
-            }
-            */
             Token::Literal(c) => {
                 self.terms.write_with(|section| section.push_cell(c));
                 TokenType::Term { heap_loc }
@@ -782,13 +737,6 @@ impl<'a> Parser<'a> {
 
         false
     }
-
-    /*
-    pub fn reset(&mut self) {
-        self.stack.clear();
-        self.var_locs.clear();
-    }
-    */
 
     fn loc_to_err_src(&self) -> ParserErrorSrc {
         ParserErrorSrc { line_num: *self.line_num, col_num: *self.col_num }
@@ -1061,21 +1009,6 @@ impl<'a> Parser<'a> {
                                 section.push_cell(str_loc_as_cell!(curly_idx));
                             });
 
-                            /*
-                            let term = match self.terms.pop() {
-                                Some(term) => term,
-                                _ => {
-                                    return Err(ParserError::IncompleteReduction(
-                                        self.lexer.line_num,
-                                        self.lexer.col_num,
-                                    ))
-                                }
-                            };
-
-                            self.terms
-                                .push(Term::Clause(Cell::default(), atom!("{}"), vec![term]));
-                            */
-
                             return Ok(true);
                         }
                     }
@@ -1147,7 +1080,11 @@ impl<'a> Parser<'a> {
                         // can't be prefix, so either inf == 0
                         // or post == 0.
                         self.reduce_op(inf + post);
-                        self.promote_atom_op(name, inf + post, spec & (XFX | XFY | YFX | YF | XF));
+                        self.promote_atom_op(
+                            name,
+                            inf + post,
+                            spec & (XFX as u32 | XFY as u32 | YFX as u32 | YF as u32 | XF as u32),
+                        );
                     }
                     _ => {
                         self.reduce_op(inf + post);
@@ -1158,14 +1095,22 @@ impl<'a> Parser<'a> {
                                 self.promote_atom_op(
                                     name,
                                     inf + post,
-                                    spec & (XFX | XFY | YFX | XF | YF),
+                                    spec & (XFX as u32
+                                        | XFY as u32
+                                        | YFX as u32
+                                        | XF as u32
+                                        | YF as u32),
                                 );
 
                                 return Ok(true);
                             }
                         }
 
-                        self.promote_atom_op(name, pre, spec & (FX | FY | NEGATIVE_SIGN));
+                        self.promote_atom_op(
+                            name,
+                            pre,
+                            spec & (FX as u32 | FY as u32 | NEGATIVE_SIGN),
+                        );
                     }
                 }
             } else {
@@ -1309,7 +1254,7 @@ impl<'a> Parser<'a> {
             }
             Token::Comma => {
                 self.reduce_op(1000);
-                self.shift(Token::Comma, 1000, XFY);
+                self.shift(Token::Comma, 1000, XFY as u32);
             }
             Token::End => match self.stack.last().map(|t| t.tt) {
                 Some(TokenType::Open)

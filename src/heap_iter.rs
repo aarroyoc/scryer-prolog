@@ -1,3 +1,5 @@
+#![allow(clippy::new_without_default)] // annotating structs annotated with #[bitfield] doesn't work
+
 #[cfg(test)]
 pub(crate) use crate::machine::gc::StacklessPreOrderHeapIter;
 
@@ -114,35 +116,10 @@ impl<'a> EagerStackfulPreOrderHeapIter<'a> {
                     }
                 }
                 (HeapCellValueTag::PStrLoc, h) => {
-                    /*
-                    let h = if self.heap[h].get_tag() == HeapCellValueTag::PStr {
-                        h
-                    } else {
-                        debug_assert_eq!(self.heap[h].get_tag(), HeapCellValueTag::PStrOffset);
-                        self.heap[h].get_value() as usize
-                    };
-                    */
-
-                    /*
-                    if self.heap[h].get_mark_bit() == self.mark_phase {
-                        continue;
-                    }
-
-                    self.heap[h].set_mark_bit(self.mark_phase);
-                    */
-
                     let (_, tail_loc) = self.heap.scan_slice_to_str(h);
 
                     self.heap[tail_loc].set_mark_bit(self.mark_phase);
                     self.iter_stack.push(self.heap[tail_loc]);
-
-                    /*
-                    if self.heap[h].get_tag() == HeapCellValueTag::PStr {
-                        let value = self.heap[h+1];
-                        self.heap[h+1].set_mark_bit(self.mark_phase);
-                        self.iter_stack.push(value);
-                    }
-                    */
                 }
                 _ => {
                 }
@@ -442,7 +419,7 @@ impl<'a, ElideLists: ListElisionPolicy> StackfulPreOrderHeapIter<'a, ElideLists>
             }
 
             read_heap_cell!(*cell,
-               (HeapCellValueTag::Str, vh) => { // | HeapCellValueTag::PStrLoc, vh) => {
+               (HeapCellValueTag::Str, vh) => {
                    let loc = IterStackLoc::iterable_loc(vh, HeapOrStackTag::Heap);
 
                    self.push_if_unmarked(loc);
@@ -473,23 +450,6 @@ impl<'a, ElideLists: ListElisionPolicy> StackfulPreOrderHeapIter<'a, ElideLists>
                    self.push_if_unmarked(loc);
                    self.stack.push(IterStackLoc::mark_loc(vs, HeapOrStackTag::Stack));
                }
-               /*
-               (HeapCellValueTag::PStrOffset, offset) => {
-                   self.push_if_unmarked(IterStackLoc::iterable_loc(offset, HeapOrStackTag::Heap));
-                   self.stack.push(IterStackLoc::iterable_loc((h.value()+1) as usize, HeapOrStackTag::Heap));
-
-                   return Some(self.read_cell(h));
-               }
-               (HeapCellValueTag::PStr) => {
-                   let tail_loc = IterStackLoc::iterable_loc((h.value()+1) as usize, HeapOrStackTag::Heap);
-
-                   self.push_if_unmarked(IterStackLoc::iterable_loc(h.value() as usize, HeapOrStackTag::Heap));
-                   self.stack.push(tail_loc);
-                   self.forward_if_referent_marked(tail_loc);
-
-                   return Some(self.read_cell(h));
-               }
-               */
                (HeapCellValueTag::PStrLoc, vh) => {
                    let cell = *cell;
                    let (_, tail_loc) = self.heap.scan_slice_to_str(vh);
@@ -574,7 +534,7 @@ pub(crate) fn stackful_preorder_iter<'a, ElideLists: ListElisionPolicy>(
 #[derive(Debug)]
 pub(crate) struct PostOrderIterator<Iter: FocusedHeapIter> {
     focus: IterStackLoc,
-    base_iter: Iter,
+    pub(crate) base_iter: Iter,
     base_iter_valid: bool,
     parent_stack: Vec<(usize, HeapCellValue, IterStackLoc)>, // number of children, parent node, focus.
 }
@@ -1721,7 +1681,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "blocked on atom_table.rs UB")]
     fn heap_stackful_iter_tests() {
         let mut wam = MockWAM::new();
 
@@ -2320,7 +2279,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "blocked on atom_table.rs UB")]
     fn heap_stackful_post_order_iter() {
         let mut wam = MockWAM::new();
 
@@ -2808,7 +2766,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore = "blocked on atom_table.rs UB")]
     fn heap_stackless_post_order_iter() {
         let mut wam = MockWAM::new();
 

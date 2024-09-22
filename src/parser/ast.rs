@@ -1,3 +1,5 @@
+#![allow(clippy::new_without_default)] // annotating structs annotated with #[bitfield] doesn't work
+
 use crate::arena::*;
 use crate::atom_table::*;
 use crate::forms::PredicateKey;
@@ -21,13 +23,112 @@ pub type Specifier = u32;
 
 pub const MAX_ARITY: usize = 255;
 
-pub const XFX: u32 = 0x0001;
-pub const XFY: u32 = 0x0002;
-pub const YFX: u32 = 0x0004;
-pub const XF: u32 = 0x0010;
-pub const YF: u32 = 0x0020;
-pub const FX: u32 = 0x0040;
-pub const FY: u32 = 0x0080;
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum OpDeclSpec {
+    XFX = 0x0001,
+    XFY = 0x0002,
+    YFX = 0x0004,
+    XF = 0x0010,
+    YF = 0x0020,
+    FX = 0x0040,
+    FY = 0x0080,
+}
+
+pub use OpDeclSpec::*;
+
+impl OpDeclSpec {
+    pub const fn value(self) -> u32 {
+        self as u32
+    }
+
+    pub fn get_spec(self) -> Atom {
+        match self {
+            XFX => atom!("xfx"),
+            XFY => atom!("xfy"),
+            YFX => atom!("yfx"),
+            FX => atom!("fx"),
+            FY => atom!("fy"),
+            XF => atom!("xf"),
+            YF => atom!("yf"),
+        }
+    }
+
+    pub const fn is_prefix(self) -> bool {
+        matches!(self, Self::FX | Self::FY)
+    }
+
+    pub const fn is_postfix(self) -> bool {
+        matches!(self, Self::XF | Self::YF)
+    }
+
+    pub const fn is_infix(self) -> bool {
+        matches!(self, Self::XFX | Self::XFY | Self::YFX)
+    }
+
+    pub const fn is_strict_left(self) -> bool {
+        matches!(self, Self::XFX | Self::XFY | Self::XF)
+    }
+
+    pub const fn is_strict_right(self) -> bool {
+        matches!(self, Self::XFX | Self::YFX | Self::FX)
+    }
+
+    #[inline(always)]
+    pub(crate) fn fixity(self) -> Fixity {
+        match self {
+            XFY | XFX | YFX => Fixity::In,
+            XF | YF => Fixity::Post,
+            FX | FY => Fixity::Pre,
+        }
+    }
+}
+
+impl From<OpDeclSpec> for u8 {
+    fn from(value: OpDeclSpec) -> Self {
+        value as u8
+    }
+}
+
+impl From<OpDeclSpec> for u32 {
+    fn from(value: OpDeclSpec) -> Self {
+        value as u32
+    }
+}
+
+impl TryFrom<u8> for OpDeclSpec {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(match value {
+            0x0001 => XFX,
+            0x0002 => XFY,
+            0x0004 => YFX,
+            0x0010 => XF,
+            0x0020 => YF,
+            0x0040 => FX,
+            0x0080 => FY,
+            _ => return Err(()),
+        })
+    }
+}
+
+impl TryFrom<Atom> for OpDeclSpec {
+    type Error = ();
+
+    fn try_from(value: Atom) -> Result<Self, Self::Error> {
+        Ok(match value {
+            atom!("xfx") => Self::XFX,
+            atom!("xfy") => Self::XFY,
+            atom!("yfx") => Self::YFX,
+            atom!("fx") => Self::FX,
+            atom!("fy") => Self::FY,
+            atom!("xf") => Self::XF,
+            atom!("yf") => Self::YF,
+            _ => return Err(()),
+        })
+    }
+}
+
 pub const DELIMITER: u32 = 0x0100;
 pub const TERM: u32 = 0x1000;
 pub const LTERM: u32 = 0x3000;
@@ -40,7 +141,7 @@ macro_rules! fixnum {
     ($n:expr, $arena:expr) => {
         Fixnum::build_with_checked($n)
             .map(|n| fixnum_as_cell!(n))
-            .unwrap_or_else(|_| typed_arena_ptr_as_cell!(arena_alloc!(Integer::from($n), $arena)))
+            .unwrap_or_else(|_| typed_arena_ptr_as_cell!(arena_alloc!(Integer::from($n), $arena) as TypedArenaPtr<Integer>))
     };
     ($wrapper:ty, $n:expr, $arena:expr) => {
         Fixnum::build_with_checked($n)
@@ -64,13 +165,13 @@ macro_rules! is_lterm {
 macro_rules! is_op {
     ($x:expr) => {
         $x as u32
-            & ($crate::parser::ast::XF
-                | $crate::parser::ast::YF
-                | $crate::parser::ast::FX
-                | $crate::parser::ast::FY
-                | $crate::parser::ast::XFX
-                | $crate::parser::ast::XFY
-                | $crate::parser::ast::YFX)
+            & ($crate::parser::ast::XF as u32
+                | $crate::parser::ast::YF as u32
+                | $crate::parser::ast::FX as u32
+                | $crate::parser::ast::FY as u32
+                | $crate::parser::ast::XFX as u32
+                | $crate::parser::ast::XFY as u32
+                | $crate::parser::ast::YFX as u32)
             != 0
     };
 }
@@ -84,14 +185,14 @@ macro_rules! is_negate {
 #[macro_export]
 macro_rules! is_prefix {
     ($x:expr) => {
-        $x as u32 & ($crate::parser::ast::FX | $crate::parser::ast::FY) != 0
+        $x as u32 & ($crate::parser::ast::FX as u32 | $crate::parser::ast::FY as u32) != 0
     };
 }
 
 #[macro_export]
 macro_rules! is_postfix {
     ($x:expr) => {
-        $x as u32 & ($crate::parser::ast::XF | $crate::parser::ast::YF) != 0
+        $x as u32 & ($crate::parser::ast::XF as u32 | $crate::parser::ast::YF as u32) != 0
     };
 }
 
@@ -99,7 +200,9 @@ macro_rules! is_postfix {
 macro_rules! is_infix {
     ($x:expr) => {
         ($x as u32
-            & ($crate::parser::ast::XFX | $crate::parser::ast::XFY | $crate::parser::ast::YFX))
+            & ($crate::parser::ast::XFX as u32
+                | $crate::parser::ast::XFY as u32
+                | $crate::parser::ast::YFX as u32))
             != 0
     };
 }
@@ -107,49 +210,48 @@ macro_rules! is_infix {
 #[macro_export]
 macro_rules! is_xfx {
     ($x:expr) => {
-        ($x as u32 & $crate::parser::ast::XFX) != 0
+        ($x as u32 & $crate::parser::ast::XFX as u32) != 0
     };
 }
 
 #[macro_export]
 macro_rules! is_xfy {
     ($x:expr) => {
-        ($x as u32 & $crate::parser::ast::XFY) != 0
+        ($x as u32 & $crate::parser::ast::XFY as u32) != 0
     };
 }
 
 #[macro_export]
 macro_rules! is_yfx {
     ($x:expr) => {
-        ($x as u32 & $crate::parser::ast::YFX) != 0
+        ($x as u32 & $crate::parser::ast::YFX as u32) != 0
     };
 }
-
 #[macro_export]
 macro_rules! is_yf {
     ($x:expr) => {
-        ($x as u32 & $crate::parser::ast::YF) != 0
+        ($x as u32 & $crate::parser::ast::YF as u32) != 0
     };
 }
 
 #[macro_export]
 macro_rules! is_xf {
     ($x:expr) => {
-        ($x as u32 & $crate::parser::ast::XF) != 0
+        ($x as u32 & $crate::parser::ast::XF as u32) != 0
     };
 }
 
 #[macro_export]
 macro_rules! is_fx {
     ($x:expr) => {
-        ($x as u32 & $crate::parser::ast::FX) != 0
+        ($x as u32 & $crate::parser::ast::FX as u32) != 0
     };
 }
 
 #[macro_export]
 macro_rules! is_fy {
     ($x:expr) => {
-        ($x as u32 & $crate::parser::ast::FY) != 0
+        ($x as u32 & $crate::parser::ast::FY as u32) != 0
     };
 }
 
@@ -242,18 +344,18 @@ pub struct OpDesc {
 
 impl OpDesc {
     #[inline]
-    pub fn build_with(prec: u16, spec: u8) -> Self {
-        OpDesc::new().with_spec(spec).with_prec(prec)
+    pub fn build_with(prec: u16, spec: OpDeclSpec) -> Self {
+        OpDesc::new().with_spec(spec as u8).with_prec(prec)
     }
 
     #[inline]
-    pub fn get(self) -> (u16, u8) {
-        (self.prec(), self.spec())
+    pub fn get(self) -> (u16, OpDeclSpec) {
+        (self.prec(), self.get_spec())
     }
 
-    pub fn set(&mut self, prec: u16, spec: u8) {
+    pub fn set(&mut self, prec: u16, spec: OpDeclSpec) {
         self.set_prec(prec);
-        self.set_spec(spec);
+        self.set_spec(spec as u8);
     }
 
     #[inline]
@@ -262,13 +364,13 @@ impl OpDesc {
     }
 
     #[inline]
-    pub fn get_spec(self) -> u8 {
-        self.spec()
+    pub fn get_spec(self) -> OpDeclSpec {
+        OpDeclSpec::try_from(self.spec()).expect("OpDecl always contains a valud OpDeclSpec")
     }
 
     #[inline]
     pub fn arity(self) -> usize {
-        if self.spec() as u32 & (XFX | XFY | YFX) == 0 {
+        if !self.get_spec().is_infix() {
             1
         } else {
             2
@@ -332,22 +434,10 @@ impl Unknown {
 pub fn default_op_dir() -> OpDir {
     let mut op_dir = OpDir::with_hasher(FxBuildHasher::default());
 
-    op_dir.insert(
-        (atom!(":-"), Fixity::In),
-        OpDesc::build_with(1200, XFX as u8),
-    );
-    op_dir.insert(
-        (atom!(":-"), Fixity::Pre),
-        OpDesc::build_with(1200, FX as u8),
-    );
-    op_dir.insert(
-        (atom!("?-"), Fixity::Pre),
-        OpDesc::build_with(1200, FX as u8),
-    );
-    op_dir.insert(
-        (atom!(","), Fixity::In),
-        OpDesc::build_with(1000, XFY as u8),
-    );
+    op_dir.insert((atom!(":-"), Fixity::In), OpDesc::build_with(1200, XFX));
+    op_dir.insert((atom!(":-"), Fixity::Pre), OpDesc::build_with(1200, FX));
+    op_dir.insert((atom!("?-"), Fixity::Pre), OpDesc::build_with(1200, FX));
+    op_dir.insert((atom!(","), Fixity::In), OpDesc::build_with(1000, XFY));
 
     op_dir
 }
@@ -442,23 +532,6 @@ impl From<(lexical::Error, ParserErrorSrc)> for ParserError {
     }
 }
 
-/*
-impl From<IOError> for ParserError {
-    fn from(e: IOError) -> ParserError {
-        ParserError::IO(e)
-    }
-}
-
-impl From<&IOError> for ParserError {
-    fn from(error: &IOError) -> ParserError {
-        if error.get_ref().filter(|e| e.is::<BadUtf8Error>()).is_some() {
-            ParserError::Utf8Error(0, 0)
-        } else {
-            ParserError::IO(error.kind().into())
-        }
-    }
-}
-*/
 #[derive(Debug, Clone, Copy)]
 pub struct CompositeOpDir<'a, 'b> {
     pub primary_op_dir: Option<&'b OpDir>,
@@ -567,52 +640,6 @@ impl Neg for Fixnum {
     }
 }
 
-/*
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Literal {
-    Atom(Atom),
-    CodeIndex(CodeIndex),
-    Fixnum(Fixnum),
-    Integer(TypedArenaPtr<Integer>),
-    Rational(TypedArenaPtr<Rational>),
-    Float(F64Offset),
-    String(Rc<String>),
-}
-
-impl From<F64Ptr> for Literal {
-    #[inline(always)]
-    fn from(ptr: F64Ptr) -> Literal {
-        Literal::Float(ptr.as_offset())
-    }
-}
-
-impl fmt::Display for Literal {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Literal::Atom(ref atom) => {
-                write!(f, "{}", atom.flat_index())
-            }
-            // Literal::Char(c) => write!(f, "'{}'", *c as u32),
-            Literal::CodeIndex(i) => write!(f, "{:x}", i.as_ptr() as u64),
-            Literal::Fixnum(n) => write!(f, "{}", n.get_num()),
-            Literal::Integer(ref n) => write!(f, "{}", n),
-            Literal::Rational(ref n) => write!(f, "{}", n),
-            Literal::Float(ref n) => write!(f, "{}", *n),
-            Literal::String(ref s) => write!(f, "\"{}\"", s.as_str()),
-        }
-    }
-}
-
-impl Literal {
-    pub fn to_atom(&self, atom_tbl: &Arc<AtomTable>) -> Option<Atom> {
-        match self {
-            Literal::Atom(atom) => Some(atom.defrock_brackets(atom_tbl)),
-            _ => None,
-        }
-    }
-}
-*/
-
 pub type Var = Rc<String>;
 
 pub(crate) fn subterm_index(
@@ -637,138 +664,6 @@ pub(crate) fn subterm_index(
         (subterm_loc, subterm)
     }
 }
-
-/*
-#[derive(Debug, Clone)]
-pub enum Term {
-    AnonVar,
-    Clause(Cell<RegType>, Atom, Vec<Term>),
-    Cons(Cell<RegType>, Box<Term>, Box<Term>),
-    Literal(Cell<RegType>, HeapCellValue),
-    // Literal(Cell<RegType>, Literal),
-    // PartialString wraps a String in anticipation of it absorbing
-    // other PartialString variants in as_partial_string.
-    PartialString(Cell<RegType>, Rc<String>, Box<Term>),
-    CompleteString(Cell<RegType>, Rc<String>),
-    Var(Cell<VarReg>, VarPtr),
-}
-
-impl Term {
-    /*
-    pub fn into_literal(self) -> Option<Literal> {
-        match self {
-            Term::Literal(_, c) => Some(c),
-            _ => None,
-        }
-    }
-    */
-
-    pub fn as_atom(&self) -> Option<Atom> {
-        if let Term::Literal(_, cell) = self {
-            if cell.get_tag() == HeapCellValueTag::Atom {
-                return Some(cell_as_atom!(cell));
-            }
-        }
-
-        None
-    }
-
-    pub fn as_code_index(&self) -> Option<TypedArenaPtr<IndexPtr>> {
-        if let Term::Literal(_, cell) = self {
-            if cell.get_tag() == HeapCellValueTag::Cons {
-                return match_untyped_arena_ptr!(cell_as_untyped_arena_ptr!(cell),
-                     (ArenaHeaderTag::IndexPtr, ptr) => {
-                         Some(ptr)
-                     }
-                     _ => {
-                         None
-                     }
-                );
-            }
-        }
-
-        None
-    }
-
-    pub fn first_arg(&self) -> Option<&Term> {
-        match self {
-            Term::Clause(_, _, ref terms) => terms.first(),
-            _ => None,
-        }
-    }
-
-    pub fn set_name(&mut self, new_name: Atom) {
-        match self {
-            Term::Clause(_, ref mut atom, ..) => {
-                *atom = new_name;
-            }
-            Term::Literal(_, ref mut cell) if cell.get_tag() == HeapCellValueTag::Atom => {
-                *cell = atom_as_cell!(new_name);
-            }
-            _ => {}
-        }
-    }
-
-    pub fn name(&self) -> Option<Atom> {
-        match self {
-            Term::Literal(_, cell) => {
-                cell.to_atom()
-            }
-            &Term::Clause(_, atom, ..) => {
-                Some(atom)
-            }
-            _ => None,
-        }
-    }
-
-    pub fn arity(&self) -> usize {
-        match self {
-            Term::Clause(_, _, ref child_terms, ..) => child_terms.len(),
-            _ => 0,
-        }
-    }
-}
-
-#[inline]
-pub fn source_arity(terms: &[Term]) -> usize {
-    if let Some(Term::Literal(_, Literal::CodeIndex(_))) = terms.last() {
-        return terms.len() - 1;
-    }
-
-    terms.len()
-}
-*/
-
-/*
-pub(crate) fn unfold_by_str_once(term: &mut Term, s: Atom) -> Option<(Term, Term)> {
-    if let Term::Clause(_, ref name, ref mut subterms) = term {
-        if let Some(Term::Literal(_, Literal::CodeIndex(_))) = subterms.last() {
-            subterms.pop();
-        }
-
-        if name == &s && subterms.len() == 2 {
-            let snd = subterms.pop().unwrap();
-            let fst = subterms.pop().unwrap();
-
-            return Some((fst, snd));
-        }
-    }
-
-    None
-}
-
-pub fn unfold_by_str(mut term: Term, s: Atom) -> Vec<Term> {
-    let mut terms = vec![];
-
-    while let Some((fst, snd)) = unfold_by_str_once(&mut term, s) {
-        terms.push(fst);
-        term = snd;
-    }
-
-    terms.push(term);
-    terms
-}
- */
 
 pub(crate) fn fetch_index_ptr(
     heap: &impl SizedHeap,
@@ -848,29 +743,6 @@ pub fn unfold_by_str(
 
     terms
 }
-
-/*
-pub fn unfold_by_str_locs(
-    heap: &mut [HeapCellValue],
-    mut term_loc: usize,
-    atom: Atom,
-) -> Vec<(HeapCellValue, usize)> {
-    let mut terms = vec![];
-    let mut current_term = heap_bound_store(
-        heap,
-        heap_bound_deref(heap, heap[term_loc]),
-    );
-
-    while let Some(fst_loc) = unfold_by_str_once(heap, current_term, atom) {
-        (term_loc, current_term) = subterm_index(heap, fst_loc + 1);
-        let (fst_loc, fst) = subterm_index(heap, fst_loc);
-        terms.push((fst, fst_loc));
-    }
-
-    terms.push((current_term, term_loc));
-    terms
-}
-*/
 
 pub fn unfold_by_str_locs(
     heap: &mut impl SizedHeapMut,
@@ -959,25 +831,6 @@ pub fn inverse_var_locs_from_iter<I: Iterator<Item = HeapCellValue>>(iter: I) ->
     inverse_var_locs
 }
 
-/*
-pub fn term_deref(heap: &[HeapCellValue], mut term_loc: usize) -> HeapCellValue {
-    loop {
-        read_heap_cell!(heap[term_loc],
-            (HeapCellValueTag::AttrVar | HeapCellValueTag::Var, h) => {
-                if h != term_loc {
-                    term_loc = h;
-                } else {
-                    return heap[h];
-                }
-            }
-            _ => {
-                return heap[term_loc];
-            }
-        )
-    }
-}
-*/
-
 pub fn term_nth_arg(heap: &impl SizedHeap, mut term_loc: usize, n: usize) -> Option<usize> {
     loop {
         read_heap_cell!(heap[term_loc],
@@ -1040,50 +893,6 @@ impl<'a> FocusedHeap<'a> {
         Self { heap, focus, inverse_var_locs }
     }
 
-    /*
-    pub fn empty() -> Self {
-        Self {
-            heap: vec![],
-            focus: 0,
-            inverse_var_locs: InverseVarLocs::default(),
-        }
-    }
-    */
-
-    /*
-    pub fn copy_term_from_machine_heap(
-        &mut self,
-        machine_st: &mut MachineState,
-        cell: HeapCellValue,
-    ) {
-        let hb = machine_st.heap.len();
-
-        copy_term(
-            CopyBallTerm::new(
-                &mut machine_st.attr_var_init.attr_var_queue,
-                &mut machine_st.stack,
-                &mut machine_st.heap,
-                &mut self.heap,
-            ),
-            cell,
-            AttrVarPolicy::DeepCopy,
-        );
-
-        for cell in self.heap.iter_mut() {
-            *cell = *cell - hb;
-        }
-    }
-    */
-
-    /*
-    pub fn as_ref_mut(&mut self, focus: usize) -> FocusedHeapRefMut {
-        FocusedHeapRefMut {
-            heap: &mut self.heap,
-            focus,
-        }
-    }
-    */
-
     pub fn deref_loc(&self, term_loc: usize) -> HeapCellValue {
         use crate::machine::heap::*;
 
@@ -1130,22 +939,4 @@ impl<'a> FocusedHeapRefMut<'a> {
     pub fn nth_arg(&self, term_loc: usize, n: usize) -> Option<usize> {
         term_nth_arg(self.heap, term_loc, n)
     }
-
-    /*
-    pub fn from_cell(heap: &'a mut Heap, cell: HeapCellValue) -> Self {
-        let focus = read_heap_cell!(cell,
-            (HeapCellValueTag::AttrVar | HeapCellValueTag::Var, h) => {
-                h
-            }
-            _ => {
-                let h = heap.len();
-                heap.push_cell(cell).unwrap();
-
-                h
-            }
-        );
-
-        Self { heap, focus }
-    }
-    */
 }

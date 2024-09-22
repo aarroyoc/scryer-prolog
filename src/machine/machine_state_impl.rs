@@ -771,38 +771,6 @@ impl MachineState {
         Some(Ordering::Equal)
     }
 
-    /* TODO: new, inlined match_partial_string. now inlined into GetPartialString,
-     * the only place it is called from. Therefore, it has been inlined.
-
-    pub fn match_partial_string(
-        &mut self,
-        value: HeapCellValue,
-        string: &str,
-    ) -> Result<(), usize> {
-        debug_assert!(value.is_ref());
-
-        self.heap[0] = value;
-        let mut heap_pstr_iter = HeapPStrIter::new(&self.heap, 0);
-
-        match heap_pstr_iter.compare_pstr_to_string(string) {
-            Some(PStrCmpResult::CompleteMatch { bytes_matched, pstr_loc }) => {
-                self.s_offset = bytes_matched;
-                self.s = HeapPtr::PStr(pstr_loc);
-                self.mode = MachineMode::Read;
-            }
-            Some(PStrCmpResult::PartialMatch { string, var_loc }) => {
-                let cell = self.heap.allocate_pstr(string)?;
-                unify!(self, cell, heap_loc_as_loc!(var_loc));
-            }
-            None => {
-                self.fail = true;
-            }
-        }
-
-        Ok(())
-    }
-    */
-
     pub(crate) fn setup_call_n_init_goal_info(
         &mut self,
         goal: HeapCellValue,

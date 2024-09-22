@@ -63,7 +63,6 @@ impl InnerHeap {
         if !new_ptr.is_null() {
             self.ptr = new_ptr;
             self.byte_cap = new_cap;
-
             true
         } else {
             false
@@ -211,6 +210,7 @@ impl<'a> Iterator for HeapView<'a> {
 impl<'a> Index<usize> for HeapView<'a> {
     type Output = HeapCellValue;
 
+    #[inline]
     fn index(&self, idx: usize) -> &Self::Output {
         debug_assert!(idx < self.slice_cell_len);
         unsafe {
@@ -267,6 +267,7 @@ impl<'a> HeapViewMut<'a> {
 impl<'a> Index<usize> for HeapViewMut<'a> {
     type Output = HeapCellValue;
 
+    #[inline]
     fn index(&self, idx: usize) -> &Self::Output {
         debug_assert!(idx < self.slice_cell_len);
         unsafe {
@@ -276,6 +277,7 @@ impl<'a> Index<usize> for HeapViewMut<'a> {
 }
 
 impl<'a> IndexMut<usize> for HeapViewMut<'a> {
+    #[inline]
     fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
         debug_assert!(idx < self.slice_cell_len);
         unsafe {
@@ -306,19 +308,6 @@ pub(crate) struct ReservedHeapSection<'a> {
 }
 
 impl<'a> ReservedHeapSection<'a> {
-    /*
-    fn grow_heap_under_slice(heap: &mut InnerHeap) -> impl FnMut(&mut Self) -> bool + '_ {
-        move |slice| unsafe {
-            if heap.grow() {
-                slice.heap_ptr = heap.ptr;
-                false
-            } else {
-                true
-            }
-        }
-    }
-    */
-
     #[inline]
     pub(crate) fn cell_len(&self) -> usize {
         self.heap_cell_len
@@ -488,6 +477,7 @@ impl<'a> ReservedHeapSection<'a> {
 impl<'a> Index<usize> for ReservedHeapSection<'a> {
     type Output = HeapCellValue;
 
+    #[inline]
     fn index(&self, idx: usize) -> &Self::Output {
         debug_assert!(idx < self.heap_cell_len);
         unsafe {
@@ -550,6 +540,7 @@ impl<'a> HeapWriter<'a> {
 impl<'a> Index<usize> for HeapWriter<'a> {
     type Output = HeapCellValue;
 
+    #[inline]
     fn index(&self, idx: usize) -> &Self::Output {
         debug_assert!(heap_index!(idx) < *self.heap_byte_len);
         unsafe {
@@ -559,6 +550,7 @@ impl<'a> Index<usize> for HeapWriter<'a> {
 }
 
 impl<'a> IndexMut<usize> for HeapWriter<'a> {
+    #[inline]
     fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
         debug_assert!(heap_index!(idx) < *self.heap_byte_len);
         unsafe {
@@ -601,6 +593,17 @@ impl Heap {
         }
     }
 
+    #[inline(always)]
+    unsafe fn grow(&mut self) -> bool {
+        let result = self.inner.grow();
+
+        if result {
+            self.pstr_vec.reserve(cell_index!(self.inner.byte_cap));
+        }
+
+        result
+    }
+
     #[inline]
     fn resource_error_offset(&self) -> usize {
         self.resource_err_loc
@@ -641,7 +644,7 @@ impl Heap {
                         pstr_vec: &mut self.pstr_vec,
                     };
                     break;
-                } else if !self.inner.grow() {
+                } else if !self.grow() {
                     return Err(self.resource_error_offset());
                 }
             }
@@ -717,7 +720,7 @@ impl Heap {
                     self.pstr_vec.extend(heap_slice.pstr_slice.iter());
 
                     break;
-                } else if !self.inner.grow() {
+                } else if !self.grow() {
                     return Err(self.resource_error_offset());
                 }
             }
@@ -807,7 +810,7 @@ impl Heap {
     pub(crate) fn push_cell(&mut self, cell: HeapCellValue) -> Result<(), usize> {
         unsafe {
             if self.inner.byte_len == self.inner.byte_cap {
-                if !self.inner.grow() {
+                if !self.grow() {
                     return Err(self.resource_error_offset());
                 }
             }
@@ -1010,7 +1013,7 @@ impl Heap {
                     self.pstr_vec.resize(self.cell_len(), true);
 
                     break;
-                } else if !self.inner.grow() {
+                } else if !self.grow() {
                     return Err(self.resource_error_offset());
                 }
             }
@@ -1037,7 +1040,7 @@ impl Heap {
                     self.inner.byte_len += heap_index!(len);
 
                     break;
-                } else if !self.inner.grow() {
+                } else if !self.grow() {
                     return Err(self.resource_error_offset());
                 }
             }
@@ -1200,14 +1203,16 @@ pub trait SizedHeapMut: IndexMut<usize, Output = HeapCellValue> + SizedHeap {
 impl Index<usize> for Heap {
     type Output = HeapCellValue;
 
+    #[inline]
     fn index(&self, idx: usize) -> &Self::Output {
-        unsafe { &*(self.inner.ptr.add(heap_index!(idx)) as *const HeapCellValue) }
+        unsafe { &*(self.inner.ptr as *const HeapCellValue).add(idx) }
     }
 }
 
 impl IndexMut<usize> for Heap {
+    #[inline]
     fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
-        unsafe { &mut *(self.inner.ptr.add(heap_index!(idx)) as *mut HeapCellValue) }
+        unsafe { &mut *(self.inner.ptr as *mut HeapCellValue).add(idx) }
     }
 }
 

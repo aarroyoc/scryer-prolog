@@ -2,6 +2,7 @@ use crate::parser::ast::*;
 use crate::parser::lexer::LexerParser;
 use crate::parser::parser::*;
 
+use base64::Engine;
 use dashu::integer::{Sign, UBig};
 use lazy_static::lazy_static;
 use num_order::NumOrd;
@@ -25,7 +26,6 @@ use crate::machine::machine_errors::*;
 use crate::machine::machine_indices::*;
 use crate::machine::machine_state::*;
 use crate::machine::partial_string::*;
-use crate::machine::preprocessor::to_op_decl;
 use crate::machine::stack::*;
 use crate::machine::streams::*;
 use crate::machine::{get_structure_index, Machine, VERIFY_ATTR_INTERRUPT_LOC};
@@ -40,8 +40,6 @@ use ordered_float::OrderedFloat;
 
 use fxhash::{FxBuildHasher, FxHasher};
 use indexmap::IndexSet;
-
-pub(crate) use ref_thread_local::RefThreadLocal;
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -75,13 +73,13 @@ use crossterm::event::{read, Event, KeyCode, KeyEvent, KeyModifiers};
 #[cfg(feature = "repl")]
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-use blake2::{Blake2b, Blake2s};
+use blake2::{Blake2b512, Blake2s256};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::{digest, hkdf, hmac, pbkdf2};
 
 #[cfg(feature = "crypto-full")]
 use ring::aead;
-use ripemd160::{Digest, Ripemd160};
+use ripemd::{Digest, Ripemd160};
 use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 
 use crrl::{ed25519, secp256k1, x25519};
@@ -91,7 +89,6 @@ use native_tls::{Identity, TlsAcceptor, TlsConnector};
 
 use base64;
 use roxmltree;
-use select;
 
 #[cfg(feature = "http")]
 use futures::future;
@@ -103,6 +100,10 @@ use warp::hyper::header::{HeaderName, HeaderValue};
 use warp::hyper::{HeaderMap, Method};
 #[cfg(feature = "http")]
 use warp::{Buf, Filter};
+
+use super::libraries;
+use super::preprocessor::to_op_decl;
+use super::preprocessor::to_op_decl_spec;
 
 #[cfg(feature = "repl")]
 pub(crate) fn get_key() -> KeyEvent {
@@ -1378,7 +1379,6 @@ impl Machine {
 
         if let Some(code_index) = index_cell {
             if !code_index.is_undefined() {
-                // println!("(fast) calling {}/{}", name.as_str(), arity);
                 load_registers(&mut self.machine_st, goal, goal_arity);
                 self.machine_st.neck_cut();
                 return call_at_index(self, name, arity, code_index.get());
@@ -3798,14 +3798,9 @@ impl Machine {
     #[cfg(feature = "repl")]
     #[inline(always)]
     pub(crate) fn get_single_char(&mut self) -> CallResult {
-        let ctrl_c = KeyEvent {
-            code: KeyCode::Char('c'),
-            modifiers: KeyModifiers::CONTROL,
-        };
-
         let key = get_key();
 
-        if key == ctrl_c {
+        if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
             let stub = functor_stub(atom!("get_single_char"), 1);
             let err = self.machine_st.interrupt_error();
             let err = self.machine_st.error_form(err, stub);
@@ -3900,7 +3895,7 @@ impl Machine {
 
         if !stream.is_stdin() && !stream.is_stdout() && !stream.is_stderr() {
             if let Some(alias) = stream.options().get_alias() {
-                self.indices.stream_aliases.remove(&alias);
+                self.indices.stream_aliases.swap_remove(&alias);
             }
 
             let close_result = stream.close();
@@ -4079,20 +4074,6 @@ impl Machine {
     #[inline(always)]
     pub(crate) fn get_next_op_db_ref(&mut self) {
         let prec = self.deref_register(1);
-
-        fn get_spec(op_spec: u8) -> Atom {
-            match op_spec as u32 {
-                XFX => atom!("xfx"),
-                XFY => atom!("xfy"),
-                YFX => atom!("yfx"),
-                FX => atom!("fx"),
-                FY => atom!("fy"),
-                XF => atom!("xf"),
-                YF => atom!("yf"),
-                _ => unreachable!(),
-            }
-        }
-
         let h = self.machine_st.heap.cell_len();
 
         fn write_op_functors_to_heap(
@@ -4109,7 +4090,7 @@ impl Machine {
                     continue;
                 }
 
-                let spec_atom = get_spec(op_desc.get_spec());
+                let spec_atom = op_desc.get_spec().get_spec();
 
                 let functor = functor!(
                     atom!("op"),
@@ -4137,17 +4118,14 @@ impl Machine {
             let orig_op = self.deref_register(3);
 
             let spec_num = if spec.get_tag() == HeapCellValueTag::Atom {
-                (match cell_as_atom!(spec) {
-                    atom!("xfx") => XFX,
-                    atom!("xfy") => XFY,
-                    atom!("yfx") => YFX,
-                    atom!("fx") => FX,
-                    atom!("fy") => FY,
-                    atom!("xf") => XF,
-                    _ => unreachable!(),
-                }) as u8
+                Some(
+                    OpDeclSpec::try_from(cell_as_atom!(spec))
+                        .ok()
+                        .filter(|spec| matches!(spec, XFX | XFY | YFX | FX | FY | XF))
+                        .expect("we should only get valid values != YF here"),
+                )
             } else {
-                0
+                None
             };
 
             let num_functors = if !orig_op.is_var() {
@@ -4221,7 +4199,7 @@ impl Machine {
                     }
 
                     if (!orig_op.is_var() && atom_as_cell!(name) != orig_op)
-                        || (!spec.is_var() && other_spec != spec_num)
+                        || (!spec.is_var() && Some(other_spec) != spec_num)
                     {
                         return None;
                     }
@@ -4419,15 +4397,14 @@ impl Machine {
             let client = reqwest::Client::builder().build().unwrap();
 
             // request
-            let mut req = reqwest::Request::new(method, address);
+            let mut req = client.request(method, address).headers(headers);
 
-            *req.headers_mut() = headers;
             if !bytes.is_empty() {
-                *req.body_mut() = Some(reqwest::Body::from(bytes));
+                req = req.body(bytes);
             }
 
             // do it!
-            match futures::executor::block_on(client.execute(req)) {
+            match futures::executor::block_on(req.send()) {
                 Ok(resp) => {
                     // status code
                     let status = resp.status().as_u16();
@@ -4643,7 +4620,8 @@ impl Machine {
             });
 
             let http_listener = HttpListener { incoming: rx };
-            let http_listener = arena_alloc!(http_listener, &mut self.machine_st.arena);
+            let http_listener: TypedArenaPtr<HttpListener> =
+                arena_alloc!(http_listener, &mut self.machine_st.arena);
 
             let addr = self.deref_register(2);
             self.machine_st.bind(
@@ -4738,7 +4716,8 @@ impl Machine {
                         self.indices.streams.insert(stream);
                         let stream = stream_as_cell!(stream);
 
-                        let handle = arena_alloc!(request.response, &mut self.machine_st.arena);
+                        let handle = arena_alloc!(request.response, &mut self.machine_st.arena)
+                            as TypedArenaPtr<HttpResponse>;
 
                         self.machine_st.bind(method.as_var().unwrap(), atom_as_cell!(method_atom));
                         self.machine_st.bind(path.as_var().unwrap(), path_cell);
@@ -5237,8 +5216,9 @@ impl Machine {
             }
         );
 
-        let result = to_op_decl(priority, specifier, op)
+        let result = to_op_decl_spec(specifier)
             .map_err(SessionError::from)
+            .map(|specifier| to_op_decl(priority, specifier, op))
             .and_then(|mut op_decl| {
                 if op_decl.op_desc.get_prec() == 0 {
                     op_decl.remove(&mut self.indices.op_dir);
@@ -6786,32 +6766,33 @@ impl Machine {
             format!("{}:{}", socket_atom.as_str(), port)
         };
 
-        let (tcp_listener, port) = match TcpListener::bind(server_addr).map_err(|e| e.kind()) {
-            Ok(tcp_listener) => {
-                let port = tcp_listener.local_addr().map(|addr| addr.port()).ok();
+        let (tcp_listener, port): (TypedArenaPtr<TcpListener>, _) =
+            match TcpListener::bind(server_addr).map_err(|e| e.kind()) {
+                Ok(tcp_listener) => {
+                    let port = tcp_listener.local_addr().map(|addr| addr.port()).ok();
 
-                if let Some(port) = port {
-                    (
-                        arena_alloc!(tcp_listener, &mut self.machine_st.arena),
-                        port as usize,
-                    )
-                } else {
+                    if let Some(port) = port {
+                        (
+                            arena_alloc!(tcp_listener, &mut self.machine_st.arena),
+                            port as usize,
+                        )
+                    } else {
+                        self.machine_st.fail = true;
+                        return Ok(());
+                    }
+                }
+                Err(ErrorKind::PermissionDenied) => {
+                    return Err(self.machine_st.open_permission_error(
+                        addr,
+                        atom!("socket_server_open"),
+                        2,
+                    ));
+                }
+                _ => {
                     self.machine_st.fail = true;
                     return Ok(());
                 }
-            }
-            Err(ErrorKind::PermissionDenied) => {
-                return Err(self.machine_st.open_permission_error(
-                    addr,
-                    atom!("socket_server_open"),
-                    2,
-                ));
-            }
-            _ => {
-                self.machine_st.fail = true;
-                return Ok(());
-            }
-        };
+            };
 
         let addr = self.deref_register(3);
         self.machine_st.bind(
@@ -7004,12 +6985,8 @@ impl Machine {
             (HeapCellValueTag::Cons, cons_ptr) => {
                 match_untyped_arena_ptr!(cons_ptr,
                     (ArenaHeaderTag::TcpListener, tcp_listener) => {
-                        unsafe {
-                            // dropping closes the instance.
-                            std::ptr::drop_in_place(&mut tcp_listener as *mut _);
-                        }
+                        tcp_listener.drop_payload();
 
-                        tcp_listener.set_tag(ArenaHeaderTag::Dropped);
                         return Ok(());
                     }
                     _ => {
@@ -7588,9 +7565,10 @@ impl Machine {
         let ints_list = match algorithm {
             atom!("sha3_224") => {
                 let mut context = Sha3_224::new();
-                context.input(&bytes);
-                let finalized_context = context.result();
-                let context_len = finalized_context.as_ref().len();
+                context.update(&bytes);
+
+                let finalized_context = context.finalize();
+                let context_len = finalized_context.len();
 
                 step_or_resource_error!(
                     self.machine_st,
@@ -7598,7 +7576,6 @@ impl Machine {
                         &mut self.machine_st.heap,
                         context_len,
                         finalized_context
-                            .as_ref()
                             .iter()
                             .map(|b| fixnum_as_cell!(Fixnum::build_with(*b as i64)))
                     )
@@ -7606,9 +7583,9 @@ impl Machine {
             }
             atom!("sha3_256") => {
                 let mut context = Sha3_256::new();
-                context.input(&bytes);
-                let finalized_context = context.result();
-                let context_len = finalized_context.as_ref().len();
+                context.update(&bytes);
+                let finalized_context = context.finalize();
+                let context_len = finalized_context.len();
 
                 step_or_resource_error!(
                     self.machine_st,
@@ -7616,7 +7593,6 @@ impl Machine {
                         &mut self.machine_st.heap,
                         context_len,
                         finalized_context
-                            .as_ref()
                             .iter()
                             .map(|b| fixnum_as_cell!(Fixnum::build_with(*b as i64)))
                     )
@@ -7624,9 +7600,9 @@ impl Machine {
             }
             atom!("sha3_384") => {
                 let mut context = Sha3_384::new();
-                context.input(&bytes);
-                let finalized_context = context.result();
-                let context_len = finalized_context.as_ref().len();
+                context.update(&bytes);
+                let finalized_context = context.finalize();
+                let context_len = finalized_context.len();
 
                 step_or_resource_error!(
                     self.machine_st,
@@ -7634,7 +7610,6 @@ impl Machine {
                         &mut self.machine_st.heap,
                         context_len,
                         finalized_context
-                            .as_ref()
                             .iter()
                             .map(|b| fixnum_as_cell!(Fixnum::build_with(*b as i64)))
                     )
@@ -7642,9 +7617,9 @@ impl Machine {
             }
             atom!("sha3_512") => {
                 let mut context = Sha3_512::new();
-                context.input(&bytes);
-                let finalized_context = context.result();
-                let context_len = finalized_context.as_ref().len();
+                context.update(&bytes);
+                let finalized_context = context.finalize();
+                let context_len = finalized_context.len();
 
                 step_or_resource_error!(
                     self.machine_st,
@@ -7652,17 +7627,16 @@ impl Machine {
                         &mut self.machine_st.heap,
                         context_len,
                         finalized_context
-                            .as_ref()
                             .iter()
                             .map(|b| fixnum_as_cell!(Fixnum::build_with(*b as i64))),
                     )
                 )
             }
             atom!("blake2s256") => {
-                let mut context = Blake2s::new();
-                context.input(&bytes);
-                let finalized_context = context.result();
-                let context_len = finalized_context.as_ref().len();
+                let mut context = Blake2s256::new();
+                context.update(&bytes);
+                let finalized_context = context.finalize();
+                let context_len = finalized_context.len();
 
                 step_or_resource_error!(
                     self.machine_st,
@@ -7670,17 +7644,16 @@ impl Machine {
                         &mut self.machine_st.heap,
                         context_len,
                         finalized_context
-                            .as_ref()
                             .iter()
                             .map(|b| fixnum_as_cell!(Fixnum::build_with(*b as i64))),
                     )
                 )
             }
             atom!("blake2b512") => {
-                let mut context = Blake2b::new();
-                context.input(&bytes);
-                let finalized_context = context.result();
-                let context_len = finalized_context.as_ref().len();
+                let mut context = Blake2b512::new();
+                context.update(&bytes);
+                let finalized_context = context.finalize();
+                let context_len = finalized_context.len();
 
                 step_or_resource_error!(
                     self.machine_st,
@@ -7688,7 +7661,6 @@ impl Machine {
                         &mut self.machine_st.heap,
                         context_len,
                         finalized_context
-                            .as_ref()
                             .iter()
                             .map(|b| fixnum_as_cell!(Fixnum::build_with(*b as i64))),
                     )
@@ -7696,9 +7668,9 @@ impl Machine {
             }
             atom!("ripemd160") => {
                 let mut context = Ripemd160::new();
-                context.input(&bytes);
-                let finalized_context = context.result();
-                let context_len = finalized_context.as_ref().len();
+                context.update(&bytes);
+                let finalized_context = context.finalize();
+                let context_len = finalized_context.len();
 
                 step_or_resource_error!(
                     self.machine_st,
@@ -7706,7 +7678,6 @@ impl Machine {
                         &mut self.machine_st.heap,
                         context_len,
                         finalized_context
-                            .as_ref()
                             .iter()
                             .map(|b| fixnum_as_cell!(Fixnum::build_with(*b as i64)))
                     )
@@ -8163,8 +8134,8 @@ impl Machine {
             .machine_st
             .value_to_str_like(self.machine_st.registers[1])
         {
-            let doc = select::document::Document::from_read(string.as_str().as_bytes()).unwrap();
-            let result = self.html_node_to_term(doc.nth(0).unwrap())?;
+            let document = scraper::Html::parse_document(&string.as_str());
+            let result = self.html_node_to_term(document.tree.root())?;
 
             unify!(self.machine_st, self.machine_st.registers[2], result);
         } else {
@@ -8320,11 +8291,11 @@ impl Machine {
         let padding = cell_as_atom!(self.deref_register(3));
         let charset = cell_as_atom!(self.deref_register(4));
 
-        let config = match (padding, charset) {
-            (atom!("true"), atom!("standard")) => base64::STANDARD,
-            (atom!("true"), _) => base64::URL_SAFE,
-            (_, atom!("standard")) => base64::STANDARD_NO_PAD,
-            (_, _) => base64::URL_SAFE_NO_PAD,
+        let b64_engine = match (padding, charset) {
+            (atom!("true"), atom!("standard")) => base64::engine::general_purpose::STANDARD,
+            (atom!("true"), _) => base64::engine::general_purpose::URL_SAFE,
+            (_, atom!("standard")) => base64::engine::general_purpose::STANDARD_NO_PAD,
+            (_, _) => base64::engine::general_purpose::URL_SAFE_NO_PAD,
         };
 
         if self.deref_register(1).is_var() {
@@ -8332,7 +8303,8 @@ impl Machine {
                 .machine_st
                 .value_to_str_like(self.machine_st.registers[2])
                 .unwrap();
-            let bytes = base64::decode_config(&*b64.as_str(), config);
+
+            let bytes = b64_engine.decode(&*b64.as_str());
 
             match bytes {
                 Ok(bs) => {
@@ -8360,7 +8332,7 @@ impl Machine {
                 bytes.push(c as u8);
             }
 
-            let b64 = base64::encode_config(bytes, config);
+            let b64 = b64_engine.encode(bytes);
             let string = resource_error_call_result!(
                 self.machine_st,
                 self.u8s_to_string(b64.as_bytes())
@@ -8376,10 +8348,7 @@ impl Machine {
     pub(crate) fn load_library_as_stream(&mut self) -> CallResult {
         let library_name = cell_as_atom!(self.deref_register(1));
 
-        use crate::machine::LIBRARIES;
-
-        let lib_ref = LIBRARIES.borrow();
-        let lib = lib_ref.get(&*library_name.as_str());
+        let lib = libraries::get(&library_name.as_str());
         match lib {
             Some(library) => {
                 let lib_stream = Stream::from_static_string(library, &mut self.machine_st.arena);
@@ -8623,13 +8592,16 @@ impl Machine {
         }
     }
 
-    pub(super) fn html_node_to_term(&mut self, node: select::node::Node) -> Result<HeapCellValue, usize> {
-        match node.name() {
-            None => self.machine_st.allocate_cstr(&node.text()),
-            Some(name) => {
+    pub(super) fn html_node_to_term(
+        &mut self,
+        node: ego_tree::NodeRef<'_, scraper::Node>,
+    ) -> Result<HeapCellValue, usize> {
+        match node.value().as_element() {
+            None => self.machine_st.allocate_cstr(&node.value().as_text().unwrap().text),
+            Some(element) => {
                 let mut avec = Vec::new();
 
-                for attr in node.attrs() {
+                for attr in element.attrs() {
                     let name = AtomTable::build_with(&self.machine_st.atom_tbl, attr.0);
                     let value = self.machine_st.allocate_cstr(attr.1)?;
 
@@ -8662,7 +8634,7 @@ impl Machine {
                     cvec.into_iter(),
                 )?;
 
-                let tag = AtomTable::build_with(&self.machine_st.atom_tbl, name);
+                let tag = AtomTable::build_with(&self.machine_st.atom_tbl, element.name());
                 let result = str_loc_as_cell!(self.machine_st.heap.cell_len());
                 let mut writer = self.machine_st.heap.reserve(4)?;
 

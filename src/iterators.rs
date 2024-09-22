@@ -203,7 +203,6 @@ pub(crate) fn fact_iterator<'a, const SKIP_ROOT: bool>(
     stack: &'a mut Stack,
     root_loc: usize,
 ) -> FactIterator<'a, SKIP_ROOT> {
-    // let cell = heap[root_loc];
     TargetIterator::new(stackful_preorder_iter(heap, stack, root_loc), root_loc, 0)
 }
 
@@ -215,7 +214,6 @@ pub(crate) fn query_iterator<'a, const SKIP_ROOT: bool>(
     stack: &'a mut Stack,
     root_loc: usize,
 ) -> QueryIterator<'a, SKIP_ROOT> {
-    // let cell = heap[root_loc];
     TargetIterator::new(stackful_post_order_iter(heap, stack, root_loc), root_loc, 1)
 }
 

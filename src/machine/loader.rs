@@ -322,11 +322,15 @@ impl<'a> LoadState<'a> for LiveLoadAndMachineState<'a> {
 
     #[inline(always)]
     fn evacuate(mut loader: Loader<'a, Self>) -> Result<Self::Evacuable, SessionError> {
-        loader
-            .payload
-            .load_state
-            .set_tag(ArenaHeaderTag::InactiveLoadState);
-        Ok(loader.payload.load_state)
+        if loader.payload.load_state.get_tag() != ArenaHeaderTag::Dropped {
+            loader
+                .payload
+                .load_state
+                .set_tag(ArenaHeaderTag::InactiveLoadState);
+            Ok(loader.payload.load_state)
+        } else {
+            unreachable!("we never evacuate after dropping")
+        }
     }
 
     #[inline(always)]
@@ -337,8 +341,8 @@ impl<'a> LoadState<'a> for LiveLoadAndMachineState<'a> {
     #[inline(always)]
     fn reset_machine(loader: &mut Loader<'a, Self>) {
         if loader.payload.load_state.get_tag() != ArenaHeaderTag::Dropped {
-            loader.payload.load_state.set_tag(ArenaHeaderTag::Dropped);
             loader.reset_machine();
+            loader.payload.load_state.drop_payload();
         }
     }
 
@@ -371,7 +375,7 @@ impl<'a> LoadState<'a> for LiveLoadAndMachineState<'a> {
 
     #[inline]
     fn err_on_builtin_module_overwrite(module_name: Atom) -> Result<(), SessionError> {
-        if LIBRARIES.borrow().contains_key(&*module_name.as_str()) {
+        if libraries::contains(&module_name.as_str()) {
             Err(SessionError::CannotOverwriteBuiltInModule(module_name))
         } else {
             Ok(())
@@ -596,7 +600,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                 RetractionRecord::AddedMetaPredicate(target_module_name, key) => {
                     match target_module_name {
                         atom!("user") => {
-                            self.wam_prelude.indices.meta_predicates.remove(&key);
+                            self.wam_prelude.indices.meta_predicates.swap_remove(&key);
                         }
                         _ => match self
                             .wam_prelude
@@ -605,7 +609,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                             .get_mut(&target_module_name)
                         {
                             Some(ref mut module) => {
-                                module.meta_predicates.remove(&key);
+                                module.meta_predicates.swap_remove(&key);
                             }
                             _ => {
                                 unreachable!()
@@ -639,7 +643,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                     }
                 }
                 RetractionRecord::AddedModule(module_name) => {
-                    self.wam_prelude.indices.modules.remove(&module_name);
+                    self.wam_prelude.indices.modules.swap_remove(&module_name);
                 }
                 RetractionRecord::ReplacedModule(
                     module_decl,
@@ -735,7 +739,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                     if let Some(ref mut module) =
                         self.wam_prelude.indices.modules.get_mut(&module_name)
                     {
-                        module.code_dir.remove(&key);
+                        module.code_dir.swap_remove(&key);
                     }
                 }
                 RetractionRecord::ReplacedModulePredicate(module_name, key, old_code_idx) => {
@@ -760,7 +764,7 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
                     op_decl.insert_into_op_dir(&mut self.wam_prelude.indices.op_dir);
                 }
                 RetractionRecord::AddedUserPredicate(key) => {
-                    self.wam_prelude.indices.code_dir.remove(&key);
+                    self.wam_prelude.indices.code_dir.swap_remove(&key);
                 }
                 RetractionRecord::ReplacedUserPredicate(key, old_code_idx) => {
                     if let Some(code_idx) = self.wam_prelude.indices.code_dir.get_mut(&key) {
@@ -1739,7 +1743,7 @@ impl Machine {
 
     #[inline]
     pub(crate) fn push_load_state_payload(&mut self) {
-        let payload = arena_alloc!(
+        let payload: TypedArenaPtr<LiveLoadState> = arena_alloc!(
             LoadStatePayload::new(self.code.len(), LiveTermStream::new(ListingSource::User),),
             &mut self.machine_st.arena
         );
@@ -1766,11 +1770,8 @@ impl Machine {
             (HeapCellValueTag::Cons, cons_ptr) => {
                 match_untyped_arena_ptr!(cons_ptr,
                     (ArenaHeaderTag::LiveLoadState, payload) => {
-                        unsafe {
-                            std::ptr::drop_in_place(
-                                payload.as_ptr() as *mut LiveLoadState,
-                            );
-                        }
+                        let mut payload = payload;
+                        payload.drop_payload()
                     }
                     _ => {}
                 );
@@ -2467,8 +2468,6 @@ impl<'a> Loader<'a, LiveLoadAndMachineState<'a>> {
         self.add_clause_clause_if_dynamic(value)?;
 
         let machine_st = LiveLoadAndMachineState::machine_st(&mut self.payload);
-
-        // let term = self.copy_term_from_heap(value);
         let term = TermWriteResult::from(&mut machine_st.heap, value)
             .map_err(|err_loc| ParserError::ResourceError(err_loc, ParserErrorSrc::default()))?;
 

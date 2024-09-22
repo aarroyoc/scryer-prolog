@@ -1277,35 +1277,6 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
         let mut cg = CodeGenerator::new(settings);
         let mut code = cg.compile_predicate(&mut machine_st.heap, clauses)?;
 
-        /*
-        if predicates.compilation_target == CompilationTarget::Module(atom!("freeze")) {
-            if key == (atom!("put_atts"), 2) {
-                for instr in &code {
-                    println!("{:?}", instr);
-                }
-            }
-        }
-        */
-
-        /*
-        println!("compiling {}/{}", key.0.as_str(), key.1);
-
-        match key {
-            // (atom!("parse_read_term_options"), 3) |
-            // (atom!("parse_read_term_options_"), 2) |
-            // (atom!("parse_options_list"), 5) |
-            // (atom!("expand_call_goal_"), 3) => {
-            (atom!("maplist"), 3) => {
-                println!("code for {}/{}", key.0.as_str(), key.1);
-
-                for instr in &code {
-                    println!("{:?}", instr);
-                }
-            }
-            _ => {}
-        }
-        */
-
         if settings.is_extensible {
             let mut clause_clause_locs = VecDeque::new();
 
@@ -1506,10 +1477,6 @@ impl<'a, LS: LoadState<'a>> Loader<'a, LS> {
         non_counted_bt: bool,
         append_or_prepend: AppendOrPrepend,
     ) -> Result<CodeIndex, SessionError> {
-        if key == (atom!("property"), 2) {
-            println!("");
-        }
-
         let settings = match self
             .wam_prelude
             .indices

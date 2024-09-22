@@ -44,8 +44,6 @@ mod targets;
 
 use instructions::instr;
 
-mod rcu;
-
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 

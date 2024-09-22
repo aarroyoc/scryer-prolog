@@ -715,7 +715,7 @@ impl VariableClassifier {
                             let context = build_stack.current_gen_context();
 
                             for (arg_c, term_loc) in
-                                ($term_loc + 1..$term_loc + $key.1 + 1).enumerate()
+                                ($term_loc + 1 ..= $term_loc + $key.1).enumerate()
                             {
                                 let mut term = FocusedHeapRefMut::from(loader.machine_heap(), term_loc);
 

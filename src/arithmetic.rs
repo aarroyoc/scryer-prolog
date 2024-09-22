@@ -1,3 +1,5 @@
+#![allow(clippy::new_without_default)] // annotating structs annotated with #[bitfield] doesn't work
+
 use crate::allocator::*;
 use crate::arena::*;
 use crate::atom_table::*;
@@ -18,7 +20,7 @@ use crate::machine::machine_errors::*;
 use dashu::base::Abs;
 use dashu::base::BitTest;
 use num_order::NumOrd;
-use ordered_float::*;
+use ordered_float::{Float, OrderedFloat};
 
 use std::cmp::{max, min, Ordering};
 use std::convert::TryFrom;

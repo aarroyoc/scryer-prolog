@@ -1,4 +1,4 @@
-use lexical::{FromLexicalLossy, parse_lossy};
+use lexical::{FromLexical, parse};
 
 use crate::arena::*;
 use crate::atom_table::*;
@@ -490,7 +490,7 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                                 arena_alloc!(
                                     n,
                                     &mut self.machine_st.arena
-                                )
+                                ) as TypedArenaPtr<Integer>
                             ))
                         })
                         .map_err(|_| ParserError::ParseBigInt(self.loc_to_err_src()))
@@ -527,7 +527,7 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                                 arena_alloc!(
                                     n,
                                     &mut self.machine_st.arena
-                                )
+                                ) as TypedArenaPtr<Integer>
                             ))
                         })
                         .map_err(|_| ParserError::ParseBigInt(self.loc_to_err_src()))
@@ -560,10 +560,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                 .or_else(|_| {
                     Integer::from_str_radix(&token, 2)
                         .map(|n| {
-                            Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                n,
-                                &mut self.machine_st.arena
-                            )))
+                            Token::Literal(typed_arena_ptr_as_cell!(
+                                arena_alloc!(
+                                    n,
+                                    &mut self.machine_st.arena
+                                ) as TypedArenaPtr<Integer>
+                            ))
                         })
                         .map_err(|_| ParserError::ParseBigInt(self.loc_to_err_src()))
                 })
@@ -659,8 +661,8 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
         }
     }
 
-    fn parse_lossy_wrapper<T: FromLexicalLossy>(&self, token: &str) -> Result<T, ParserError> {
-        match parse_lossy::<T, _>(token.as_bytes()) {
+    fn parse_lossy_wrapper<T: FromLexical>(&self, token: &str) -> Result<T, ParserError> {
+        match parse::<T, _>(token.as_bytes()) {
             Ok(n) => Ok(n),
             Err(e) => return Err(ParserError::LexicalError(e, self.loc_to_err_src())),
         }
@@ -719,10 +721,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                         token
                             .parse::<Integer>()
                             .map(|n| {
-                                Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                    n,
-                                    &mut self.machine_st.arena
-                                )))
+                                Token::Literal(typed_arena_ptr_as_cell!(
+                                    arena_alloc!(
+                                        n,
+                                        &mut self.machine_st.arena
+                                    ) as TypedArenaPtr<Integer>
+                                ))
                             })
                             .map_err(|_| ParserError::ParseBigInt(self.loc_to_err_src()))
                     })
@@ -811,10 +815,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                         token
                             .parse::<Integer>()
                             .map(|n| {
-                                Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                    n,
-                                    &mut self.machine_st.arena
-                                )))
+                                Token::Literal(typed_arena_ptr_as_cell!(
+                                    arena_alloc!(
+                                        n,
+                                        &mut self.machine_st.arena
+                                    ) as TypedArenaPtr<Integer>
+                                ))
                             })
                             .map_err(|_| ParserError::ParseBigInt(self.loc_to_err_src()))
                     })
@@ -832,10 +838,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                                 token
                                     .parse::<Integer>()
                                     .map(|n| {
-                                        Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                            n,
-                                            &mut self.machine_st.arena
-                                        )))
+                                        Token::Literal(typed_arena_ptr_as_cell!(
+                                            arena_alloc!(
+                                                n,
+                                                &mut self.machine_st.arena
+                                            ) as TypedArenaPtr<Integer>
+                                        ))
                                     })
                                     .map_err(|_| {
                                         ParserError::ParseBigInt(self.loc_to_err_src())
@@ -857,10 +865,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                                 token
                                     .parse::<Integer>()
                                     .map(|n| {
-                                        Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                            n,
-                                            &mut self.machine_st.arena
-                                        )))
+                                        Token::Literal(typed_arena_ptr_as_cell!(
+                                            arena_alloc!(
+                                                n,
+                                                &mut self.machine_st.arena
+                                            ) as TypedArenaPtr<Integer>
+                                        ))
                                     })
                                     .map_err(|_| {
                                         ParserError::ParseBigInt(self.loc_to_err_src())
@@ -882,10 +892,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                                 token
                                     .parse::<Integer>()
                                     .map(|n| {
-                                        Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                            n,
-                                            &mut self.machine_st.arena
-                                        )))
+                                        Token::Literal(typed_arena_ptr_as_cell!(
+                                            arena_alloc!(
+                                                n,
+                                                &mut self.machine_st.arena
+                                            ) as TypedArenaPtr<Integer>
+                                        ))
                                     })
                                     .map_err(|_| {
                                         ParserError::ParseBigInt(self.loc_to_err_src())
@@ -932,10 +944,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                                 token
                                     .parse::<Integer>()
                                     .map(|n| {
-                                        Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                            n,
-                                            &mut self.machine_st.arena
-                                        )))
+                                        Token::Literal(typed_arena_ptr_as_cell!(
+                                            arena_alloc!(
+                                                n,
+                                                &mut self.machine_st.arena
+                                            ) as TypedArenaPtr<Integer>
+                                        ))
                                     })
                                     .map_err(|_| {
                                         ParserError::ParseBigInt(self.loc_to_err_src())
@@ -950,10 +964,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                         token
                             .parse::<Integer>()
                             .map(|n| {
-                                Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                    n,
-                                    &mut self.machine_st.arena
-                                )))
+                                Token::Literal(typed_arena_ptr_as_cell!(
+                                    arena_alloc!(
+                                        n,
+                                        &mut self.machine_st.arena
+                                    ) as TypedArenaPtr<Integer>
+                                ))
                             })
                             .map_err(|_| ParserError::ParseBigInt(self.loc_to_err_src()))
                     })
@@ -966,10 +982,12 @@ impl<'a, R: CharRead> LexerParser<'a, R> {
                     token
                         .parse::<Integer>()
                         .map(|n| {
-                            Token::Literal(typed_arena_ptr_as_cell!(arena_alloc!(
-                                n,
-                                &mut self.machine_st.arena
-                            )))
+                            Token::Literal(typed_arena_ptr_as_cell!(
+                                arena_alloc!(
+                                    n,
+                                    &mut self.machine_st.arena
+                                ) as TypedArenaPtr<Integer>
+                            ))
                         })
                         .map_err(|_| ParserError::ParseBigInt(self.loc_to_err_src()))
                 })

@@ -249,6 +249,20 @@ impl DomainError for Number {
     }
 }
 
+impl DomainError for MachineStub {
+    fn domain_error(self, _machine_st: &mut MachineState, error: DomainErrorType) -> MachineError {
+        let stub = functor!(
+            atom!("domain_error"),
+            [atom_as_cell((error.as_atom())), functor(self)]
+        );
+
+        MachineError {
+            stub,
+            location: None,
+        }
+    }
+}
+
 #[inline(always)]
 pub(super) fn functor_stub(name: Atom, arity: usize) -> MachineStub {
     functor!(atom!("/"), [atom_as_cell(name), fixnum(arity)])
@@ -383,6 +397,42 @@ impl MachineState {
         }
     }
 
+    pub(crate) fn directive_error(&mut self, err: DirectiveError) -> MachineError {
+        match err {
+            DirectiveError::ExpectedDirective(_term) => self.domain_error(
+                DomainErrorType::Directive,
+                atom_as_cell!(atom!("todo_insert_invalid_term_here")),
+            ),
+            DirectiveError::InvalidDirective(name, arity) => {
+                self.domain_error(DomainErrorType::Directive, functor_stub(name, arity))
+            }
+            DirectiveError::InvalidOpDeclNameType(_term) => self.type_error(
+                ValidType::List,
+                atom_as_cell!(atom!("todo_insert_invalid_term_here")),
+            ),
+            DirectiveError::InvalidOpDeclSpecDomain(_term) => self.domain_error(
+                DomainErrorType::OperatorSpecifier,
+                atom_as_cell!(atom!("todo_insert_invalid_term_here")),
+            ),
+            DirectiveError::InvalidOpDeclSpecValue(atom) => {
+                self.domain_error(DomainErrorType::OperatorSpecifier, atom_as_cell!(atom))
+            }
+            DirectiveError::InvalidOpDeclPrecType(_term) => self.type_error(
+                ValidType::Integer,
+                atom_as_cell!(atom!("todo_insert_invalid_term_here")),
+            ),
+            DirectiveError::InvalidOpDeclPrecDomain(num) => {
+                self.domain_error(DomainErrorType::OperatorPriority, fixnum_as_cell!(num))
+            }
+            DirectiveError::ShallNotCreate(atom) => {
+                self.permission_error(Permission::Create, atom!("operator"), atom)
+            }
+            DirectiveError::ShallNotModify(atom) => {
+                self.permission_error(Permission::Modify, atom!("operator"), atom)
+            }
+        }
+    }
+
     pub(super) fn permission_error<T: PermissionError>(
         &mut self,
         err: Permission,
@@ -508,6 +558,10 @@ impl MachineState {
             return self.arithmetic_error(err);
         }
 
+        if let CompilationError::InvalidDirective(err) = err {
+            return self.directive_error(err);
+        }
+
         let location = err.line_and_col_num();
         let stub = err.as_functor();
 
@@ -609,7 +663,7 @@ pub enum CompilationError {
     ExpectedRel,
     InadmissibleFact,
     InadmissibleQueryTerm,
-    InconsistentEntry,
+    InvalidDirective(DirectiveError),
     InvalidMetaPredicateDecl,
     InvalidModuleDecl,
     InvalidModuleExport,
@@ -617,6 +671,19 @@ pub enum CompilationError {
     InvalidUseModuleDecl,
     InvalidModuleResolution(Atom),
     UnreadableTerm,
+}
+
+#[derive(Debug)]
+pub enum DirectiveError {
+    ExpectedDirective(HeapCellValue),
+    InvalidDirective(Atom, usize /* arity */),
+    InvalidOpDeclNameType(HeapCellValue),
+    InvalidOpDeclSpecDomain(HeapCellValue),
+    InvalidOpDeclSpecValue(Atom),
+    InvalidOpDeclPrecType(HeapCellValue),
+    InvalidOpDeclPrecDomain(Fixnum),
+    ShallNotCreate(Atom),
+    ShallNotModify(Atom),
 }
 
 impl From<ArithmeticError> for CompilationError {
@@ -663,8 +730,8 @@ impl CompilationError {
                 // TODO: type_error(callable, _).
                 functor!(atom!("inadmissible_query_term"))
             }
-            CompilationError::InconsistentEntry => {
-                functor!(atom!("inconsistent_entry"))
+            CompilationError::InvalidDirective(_) => {
+                functor!(atom!("directive_error"))
             }
             CompilationError::InvalidMetaPredicateDecl => {
                 functor!(atom!("invalid_meta_predicate_decl"))
@@ -728,6 +795,9 @@ pub(crate) enum DomainErrorType {
     SourceSink,
     Stream,
     StreamOrAlias,
+    OperatorSpecifier,
+    OperatorPriority,
+    Directive,
 }
 
 impl DomainErrorType {
@@ -739,6 +809,9 @@ impl DomainErrorType {
             DomainErrorType::SourceSink => atom!("source_sink"),
             DomainErrorType::Stream => atom!("stream"),
             DomainErrorType::StreamOrAlias => atom!("stream_or_alias"),
+            DomainErrorType::OperatorSpecifier => atom!("operator_specifier"),
+            DomainErrorType::OperatorPriority => atom!("operator_priority"),
+            DomainErrorType::Directive => atom!("directive"),
         }
     }
 }

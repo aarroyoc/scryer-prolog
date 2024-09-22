@@ -21,7 +21,7 @@ and finally we add the pointer the size of what we've written.
 
 use crate::atom_table::Atom;
 
-use std::alloc::{alloc, Layout};
+use std::alloc::{self, Layout};
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -150,7 +150,7 @@ impl ForeignFunctionTable {
                     FunctionImpl {
                         cif,
                         args,
-                        code_ptr: CodePtr(code_ptr.into_raw().into_raw() as *mut _),
+                        code_ptr: CodePtr(code_ptr.into_raw().as_raw_ptr()),
                         return_struct_name,
                     },
                 );
@@ -223,42 +223,47 @@ impl ForeignFunctionTable {
         arg: &mut Value,
         structs_table: &mut HashMap<String, StructImpl>,
     ) -> Result<(Box<dyn Any>, usize, usize), FFIError> {
-        unsafe {
-            match arg {
-                Value::Struct(ref name, ref mut struct_args) => {
-                    if let Some(ref mut struct_type) = structs_table.clone().get_mut(name) {
-                        let layout = Layout::from_size_align(
-                            struct_type.ffi_type.size,
-                            struct_type.ffi_type.alignment.into(),
-                        )
-                        .unwrap();
-                        let align = struct_type.ffi_type.alignment as usize;
-                        let size = struct_type.ffi_type.size;
-                        let ptr = alloc(layout) as *mut c_void;
-                        let mut field_ptr = ptr;
+        match arg {
+            Value::Struct(ref name, ref mut struct_args) => {
+                if let Some(ref mut struct_type) = structs_table.clone().get_mut(name) {
+                    let layout = Layout::from_size_align(
+                        struct_type.ffi_type.size,
+                        struct_type.ffi_type.alignment.into(),
+                    )
+                    .unwrap();
+                    let align = struct_type.ffi_type.alignment as usize;
+                    let size = struct_type.ffi_type.size;
+                    let ptr = unsafe { alloc::alloc(layout) as *mut c_void };
 
-                        #[allow(clippy::needless_range_loop)]
-                        for i in 0..(struct_type.fields.len() - 1) {
-                            macro_rules! try_write_int {
-                                ($type:ty) => {{
-                                    field_ptr = field_ptr
-                                        .add(field_ptr.align_offset(std::mem::align_of::<$type>()));
-                                    let n: $type = <$type>::try_from(struct_args[i].as_int()?)
-                                        .map_err(|_| FFIError::ValueDontFit)?;
-                                    std::ptr::write(field_ptr as *mut $type, n);
-                                    field_ptr = field_ptr.add(std::mem::size_of::<$type>());
-                                }};
-                            }
+                    if ptr.is_null() {
+                        panic!("allocation failed")
+                    }
 
-                            macro_rules! write {
-                                ($type:ty, $value:expr) => {{
-                                    let data: $type = $value;
-                                    std::ptr::write(field_ptr as *mut $type, data);
-                                    field_ptr = field_ptr.add(align);
-                                }};
-                            }
+                    let mut field_ptr = ptr;
 
-                            let field = struct_type.fields[i];
+                    #[allow(clippy::needless_range_loop)]
+                    for i in 0..(struct_type.fields.len() - 1) {
+                        macro_rules! try_write_int {
+                            ($type:ty) => {{
+                                field_ptr = field_ptr
+                                    .add(field_ptr.align_offset(std::mem::align_of::<$type>()));
+                                let n: $type = <$type>::try_from(struct_args[i].as_int()?)
+                                    .map_err(|_| FFIError::ValueDontFit)?;
+                                std::ptr::write(field_ptr as *mut $type, n);
+                                field_ptr = field_ptr.add(std::mem::size_of::<$type>());
+                            }};
+                        }
+
+                        macro_rules! write {
+                            ($type:ty, $value:expr) => {{
+                                let data: $type = $value;
+                                std::ptr::write(field_ptr as *mut $type, data);
+                                field_ptr = field_ptr.add(align);
+                            }};
+                        }
+
+                        let field = struct_type.fields[i];
+                        unsafe {
                             match (*field).type_ as u32 {
                                 libffi::raw::FFI_TYPE_UINT8 => try_write_int!(u8),
                                 libffi::raw::FFI_TYPE_SINT8 => try_write_int!(i8),
@@ -294,14 +299,15 @@ impl ForeignFunctionTable {
                                 }
                             }
                         }
-                        #[allow(clippy::from_raw_with_void_ptr)]
-                        Ok((Box::from_raw(ptr), size, align))
-                    } else {
-                        Err(FFIError::InvalidStructName)
                     }
+
+                    #[allow(clippy::from_raw_with_void_ptr)]
+                    Ok((unsafe { Box::from_raw(ptr) }, size, align))
+                } else {
+                    Err(FFIError::InvalidStructName)
                 }
-                _ => Err(FFIError::ValueCast),
             }
+            _ => Err(FFIError::ValueCast),
         }
     }
 
@@ -377,7 +383,11 @@ impl ForeignFunctionTable {
                         struct_type.ffi_type.alignment.into(),
                     )
                     .unwrap();
-                    let ptr = alloc(layout) as *mut c_void;
+                    let ptr = alloc::alloc(layout) as *mut c_void;
+
+                    if ptr.is_null() {
+                        panic!("allocation failed")
+                    }
 
                     libffi::raw::ffi_call(
                         &mut function_impl.cif,
@@ -436,18 +446,20 @@ impl ForeignFunctionTable {
                     }
                     libffi::raw::FFI_TYPE_SINT64 => read_and_push_int!(i64),
                     libffi::raw::FFI_TYPE_POINTER => read_and_push_int!(i64),
-		    libffi::raw::FFI_TYPE_FLOAT => {
-			field_ptr = field_ptr.add(field_ptr.align_offset(std::mem::align_of::<f32>()));
-			let n = std::ptr::read(field_ptr as *mut f32);
-			returns.push(Value::Float(f32::from(n).into()));
-			field_ptr = field_ptr.add(std::mem::size_of::<f32>());
-		    }
-		    libffi::raw::FFI_TYPE_DOUBLE => {
-			field_ptr = field_ptr.add(field_ptr.align_offset(std::mem::align_of::<f64>()));
-			let n = std::ptr::read(field_ptr as *mut f64);
-			returns.push(Value::Float(f64::from(n)));
-			field_ptr = field_ptr.add(std::mem::size_of::<f64>());
-		    }
+                    libffi::raw::FFI_TYPE_FLOAT => {
+                        field_ptr =
+                            field_ptr.add(field_ptr.align_offset(std::mem::align_of::<f32>()));
+                        let n: f32 = std::ptr::read(field_ptr as *mut f32);
+                        returns.push(Value::Float(n.into()));
+                        field_ptr = field_ptr.add(std::mem::size_of::<f32>());
+                    }
+                    libffi::raw::FFI_TYPE_DOUBLE => {
+                        field_ptr =
+                            field_ptr.add(field_ptr.align_offset(std::mem::align_of::<f64>()));
+                        let n: f64 = std::ptr::read(field_ptr as *mut f64);
+                        returns.push(Value::Float(n));
+                        field_ptr = field_ptr.add(std::mem::size_of::<f64>());
+                    }
                     libffi::raw::FFI_TYPE_STRUCT => {
                         let substruct = struct_type.atom_fields[i].as_str();
                         let struct_type = self

@@ -1,8 +1,19 @@
 use crate::atom_table::*;
+use crate::heap_iter::{stackful_post_order_iter, NonListElider};
+use crate::machine::{F64Offset, F64Ptr, Fixnum, HeapCellValueTag};
+use crate::parser::ast::Var;
 use dashu::*;
+use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt::Display;
+use std::fmt::Write;
+use std::iter::FromIterator;
+
+use super::Machine;
+use super::{HeapCellValue, Number};
 
 pub type QueryResult = Result<QueryResolution, String>;
 
@@ -13,17 +24,21 @@ pub enum QueryResolution {
     Matches(Vec<QueryMatch>),
 }
 
-pub fn prolog_value_to_json_string(value: Value) -> String {
+pub fn write_prolog_value_as_json<W: Write>(
+    writer: &mut W,
+    value: &Value,
+) -> Result<(), std::fmt::Error> {
     match value {
-        Value::Integer(i) => format!("{}", i),
-        Value::Float(f) => format!("{}", f),
-        Value::Rational(r) => format!("{}", r),
-        Value::Atom(a) => format!("{}", a.as_str()),
+        Value::Integer(i) => write!(writer, "{}", i),
+        Value::Float(f) => write!(writer, "{}", f),
+        Value::Rational(r) => write!(writer, "{}", r),
+        Value::Atom(a) => writer.write_str(a.as_str()),
         Value::String(s) => {
             if let Err(_e) = serde_json::from_str::<serde_json::Value>(s.as_str()) {
                 //treat as string literal
                 //escape double quotes
-                format!(
+                write!(
+                    writer,
                     "\"{}\"",
                     s.replace('\"', "\\\"")
                         .replace('\n', "\\n")
@@ -32,60 +47,71 @@ pub fn prolog_value_to_json_string(value: Value) -> String {
                 )
             } else {
                 //return valid json string
-                s
+                writer.write_str(s)
             }
         }
         Value::List(l) => {
-            let mut string_result = "[".to_string();
-            for (i, v) in l.iter().enumerate() {
-                if i > 0 {
-                    string_result.push(',');
+            writer.write_char('[')?;
+            if let Some((first, rest)) = l.split_first() {
+                write_prolog_value_as_json(writer, first)?;
+
+                for other in rest {
+                    writer.write_char(',')?;
+                    write_prolog_value_as_json(writer, other)?;
                 }
-                string_result.push_str(&prolog_value_to_json_string(v.clone()));
             }
-            string_result.push(']');
-            string_result
+            writer.write_char(']')
         }
         Value::Structure(s, l) => {
-            let mut string_result = format!("\"{}\":[", s.as_str());
-            for (i, v) in l.iter().enumerate() {
-                if i > 0 {
-                    string_result.push(',');
+            write!(writer, "\"{}\":[", s.as_str())?;
+
+            if let Some((first, rest)) = l.split_first() {
+                write_prolog_value_as_json(writer, first)?;
+                for other in rest {
+                    writer.write_char(',')?;
+                    write_prolog_value_as_json(writer, other)?;
                 }
-                string_result.push_str(&prolog_value_to_json_string(v.clone()));
             }
-            string_result.push(']');
-            string_result
+            writer.write_char(']')
         }
-        _ => "null".to_string(),
+        _ => writer.write_str("null"),
     }
 }
 
-fn prolog_match_to_json_string(query_match: &QueryMatch) -> String {
-    let mut string_result = "{".to_string();
-    for (i, (k, v)) in query_match.bindings.iter().enumerate() {
-        if i > 0 {
-            string_result.push(',');
+fn write_prolog_match_as_json<W: std::fmt::Write>(
+    writer: &mut W,
+    query_match: &QueryMatch,
+) -> Result<(), std::fmt::Error> {
+    writer.write_char('{')?;
+    let mut iter = query_match.bindings.iter();
+
+    if let Some((k, v)) = iter.next() {
+        write!(writer, "\"{k}\":")?;
+        write_prolog_value_as_json(writer, v)?;
+
+        for (k, v) in iter {
+            write!(writer, ",\"{k}\":")?;
+            write_prolog_value_as_json(writer, v)?;
         }
-        string_result.push_str(&format!(
-            "\"{}\":{}",
-            k,
-            prolog_value_to_json_string(v.clone())
-        ));
     }
-    string_result.push('}');
-    string_result
+    writer.write_char('}')
 }
 
-impl ToString for QueryResolution {
-    fn to_string(&self) -> String {
+impl Display for QueryResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            QueryResolution::True => "true".to_string(),
-            QueryResolution::False => "false".to_string(),
+            QueryResolution::True => f.write_str("true"),
+            QueryResolution::False => f.write_str("false"),
             QueryResolution::Matches(matches) => {
-                let matches_json: Vec<String> =
-                    matches.iter().map(prolog_match_to_json_string).collect();
-                format!("[{}]", matches_json.join(","))
+                f.write_char('[')?;
+                if let Some((first, rest)) = matches.split_first() {
+                    write_prolog_match_as_json(f, first)?;
+                    for other in rest {
+                        f.write_char(',')?;
+                        write_prolog_match_as_json(f, other)?;
+                    }
+                }
+                f.write_char(']')
             }
         }
     }
@@ -108,11 +134,239 @@ pub enum Value {
     Integer(Integer),
     Rational(Rational),
     Float(OrderedFloat<f64>),
-    Atom(Atom),
+    Atom(String),
     String(String),
     List(Vec<Value>),
-    Structure(Atom, Vec<Value>),
-    Var,
+    Structure(String, Vec<Value>),
+    Var(String),
+}
+
+/// This is an auxiliary function to turn a count into names of anonymous variables like _A, _B,
+/// _AB, etc...
+fn count_to_letter_code(mut count: usize) -> String {
+    let mut letters = Vec::new();
+
+    loop {
+        let letter_idx = (count % 26) as u32;
+        letters.push(char::from_u32('A' as u32 + letter_idx).unwrap());
+        count /= 26;
+
+        if count == 0 {
+            break;
+        }
+    }
+
+    letters.into_iter().chain("_".chars()).rev().collect()
+}
+
+impl Value {
+    pub(crate) fn from_heapcell(
+        machine: &mut Machine,
+        heap_cell: HeapCellValue,
+        var_names: &mut IndexMap<HeapCellValue, Var>,
+    ) -> Self {
+        // Adapted from MachineState::read_term_from_heap
+        let mut term_stack = vec![];
+
+        machine.machine_st.heap[0] = heap_cell;
+
+        let mut iter = stackful_post_order_iter::<NonListElider>(
+            &mut machine.machine_st.heap,
+            &mut machine.machine_st.stack,
+            0,
+        );
+
+        let mut anon_count: usize = 0;
+
+        while let Some(addr) = iter.next() {
+            let addr = unmark_cell_bits!(addr);
+
+            read_heap_cell!(addr,
+                (HeapCellValueTag::Lis) => {
+                    let tail = term_stack.pop().unwrap();
+                    let head = term_stack.pop().unwrap();
+
+                    let list = match tail {
+                        Value::Atom(atom) if atom == "[]" => match head {
+                            Value::Atom(ref a) if a.chars().collect::<Vec<_>>().len() == 1 => {
+                                // Handle lists of char as strings
+                                Value::String(a.to_string())
+                            }
+                            _ => Value::List(vec![head]),
+                        },
+                        Value::List(elems) if elems.is_empty() => match head {
+                            // a.chars().collect::<Vec<_>>().len() == 1
+                            Value::Atom(ref a) if a.chars().collect::<Vec<_>>().len() == 1 => {
+                                // Handle lists of char as strings
+                                Value::String(a.to_string())
+                            },
+                            _ => Value::List(vec![head]),
+                        },
+                        Value::List(mut elems) => {
+                            elems.insert(0, head);
+                            Value::List(elems)
+                        },
+                        Value::String(mut elems) => match head {
+                            Value::Atom(ref a) if a.chars().collect::<Vec<_>>().len() == 1 => {
+                                // Handle lists of char as strings
+                                elems.insert(0, a.chars().next().unwrap());
+                                Value::String(elems)
+                            },
+                            _ => {
+                                let mut elems: Vec<Value> = elems
+                                    .chars()
+                                    .map(|x| Value::Atom(x.into()))
+                                    .collect();
+                                elems.insert(0, head);
+                                Value::List(elems)
+                            }
+                        },
+                        _ => {
+                            Value::Structure(".".into(), vec![head, tail])
+                        }
+                    };
+                    term_stack.push(list);
+                }
+                (HeapCellValueTag::Var | HeapCellValueTag::AttrVar | HeapCellValueTag::StackVar) => {
+                    let var = var_names.get(&addr).cloned();
+                    match var {
+                        Some(name) => term_stack.push(Value::Var(name.to_string())),
+                        _ => {
+                            let anon_name = loop {
+                                // Generate a name for the anonymous variable
+                                let anon_name = count_to_letter_code(anon_count);
+
+                                // Find if this name is already being used
+                                var_names.sort_by(|_, a, _, b| a.cmp(b));
+
+                                let binary_result = var_names.binary_search_by(|_,a| {
+                                    let a: &String = a.borrow();
+                                    a.cmp(&anon_name)
+                                });
+
+                                match binary_result {
+                                    Ok(_) => anon_count += 1, // Name already used
+                                    Err(_) => {
+                                        // Name not used, assign it to this variable
+                                        let var = anon_name.clone();
+                                        var_names.insert(addr, Var::from(var));
+                                        break anon_name;
+                                    },
+                                }
+                            };
+                            term_stack.push(Value::Var(anon_name));
+                        },
+                    }
+                }
+                (HeapCellValueTag::F64, f) => {
+                    term_stack.push(Value::Float(*f));
+                }
+                (HeapCellValueTag::Fixnum, n) => {
+                    term_stack.push(Value::Integer(n.into()));
+                }
+                (HeapCellValueTag::Cons) => {
+                    match Number::try_from(addr) {
+                        Ok(Number::Integer(i)) => term_stack.push(Value::Integer((*i).clone())),
+                        Ok(Number::Rational(r)) => term_stack.push(Value::Rational((*r).clone())),
+                        _ => {}
+                    }
+                }
+                (HeapCellValueTag::Atom, (name, arity)) => {
+                    //let h = iter.focus().value() as usize;
+                    //let mut arity = arity;
+
+                    // Not sure why/if this is needed.
+                    // Might find out with better testing later.
+                    /*
+                    if iter.heap.len() > h + arity + 1 {
+                        let value = iter.heap[h + arity + 1];
+
+                        if let Some(idx) = get_structure_index(value) {
+                            // in the second condition, arity == 0,
+                            // meaning idx cannot pertain to this atom
+                            // if it is the direct subterm of a larger
+                            // structure.
+                            if arity > 0 || !iter.direct_subterm_of_str(h) {
+                                term_stack.push(
+                                    Term::Literal(Cell::default(), Literal::CodeIndex(idx))
+                                );
+
+                                arity += 1;
+                            }
+                        }
+                    }
+                    */
+
+                    if arity == 0 {
+                        let atom_name = name.as_str().to_string();
+                        if atom_name == "[]" {
+                            term_stack.push(Value::List(vec![]));
+                        } else {
+                            term_stack.push(Value::Atom(atom_name));
+                        }
+                    } else {
+                        let subterms = term_stack
+                            .drain(term_stack.len() - arity ..)
+                            .collect();
+
+                        term_stack.push(Value::Structure(name.as_str().to_string(), subterms));
+                    }
+                }
+                (HeapCellValueTag::PStrLoc, pstr_loc) => {
+                    let tail = term_stack.pop().unwrap();
+                    let char_iter = iter.base_iter.heap.char_iter(pstr_loc);
+
+                    match tail {
+                        Value::Atom(atom) => {
+                            if atom == "[]" {
+                                term_stack.push(Value::String(atom.as_str().to_string()));
+                            }
+                        },
+                        Value::List(l) if l.is_empty() => {
+                            term_stack.push(Value::String(char_iter.collect()));
+                        }
+                        Value::List(l) => {
+                            let mut list: Vec<Value> = char_iter
+                                .map(|x| Value::Atom(x.to_string()))
+                                .collect();
+                            list.extend(l.into_iter());
+                            term_stack.push(Value::List(list));
+                        },
+                        _ => {
+                            let mut list: Vec<Value> = char_iter
+                                .map(|x| Value::Atom(x.to_string()))
+                                .collect();
+
+                            let mut partial_list = Value::Structure(
+                                ".".into(),
+                                vec![
+                                    list.pop().unwrap(),
+                                    tail,
+                                ],
+                            );
+
+                            while let Some(last) = list.pop() {
+                                partial_list = Value::Structure(
+                                    ".".into(),
+                                    vec![
+                                        last,
+                                        partial_list,
+                                    ],
+                                );
+                            }
+
+                            term_stack.push(partial_list);
+                        }
+                    }
+                }
+                _ => {
+                }
+            );
+        }
+
+        debug_assert_eq!(term_stack.len(), 1);
+        term_stack.pop().unwrap()
+    }
 }
 
 impl From<BTreeMap<&str, Value>> for QueryMatch {
@@ -178,6 +432,14 @@ impl From<Vec<QueryResolutionLine>> for QueryResolution {
         }
 
         QueryResolution::False
+    }
+}
+
+impl FromIterator<QueryResolutionLine> for QueryResolution {
+    fn from_iter<I: IntoIterator<Item = QueryResolutionLine>>(iter: I) -> Self {
+        // TODO: Probably a good idea to implement From<Vec<QueryResolutionLine>> based on this
+        // instead.
+        iter.into_iter().collect::<Vec<_>>().into()
     }
 }
 
@@ -323,7 +585,7 @@ impl TryFrom<String> for Value {
                 }
             }
 
-            Ok(Value::Structure(atom!("{}"), values))
+            Ok(Value::Structure("{}".into(), values))
         } else if trimmed.starts_with("<<") && trimmed.ends_with(">>") {
             let iter = trimmed[2..trimmed.len() - 2].split(',');
             let mut values = vec![];
@@ -337,7 +599,7 @@ impl TryFrom<String> for Value {
                 }
             }
 
-            Ok(Value::Structure(atom!("<<>>"), values))
+            Ok(Value::Structure("<<>>".into(), values))
         } else if !trimmed.contains(',') && !trimmed.contains('\'') && !trimmed.contains('"') {
             Ok(Value::String(trimmed.into()))
         } else {

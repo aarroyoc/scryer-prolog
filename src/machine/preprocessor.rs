@@ -15,46 +15,77 @@ use indexmap::IndexMap;
 use indexmap::IndexSet;
 
 use std::convert::TryFrom;
+pub(crate) fn to_op_decl(prec: u16, spec: OpDeclSpec, name: Atom) -> OpDecl {
+    OpDecl::new(OpDesc::build_with(prec, spec), name)
+}
 
-pub(crate) fn to_op_decl(prec: u16, spec: Atom, name: Atom) -> Result<OpDecl, CompilationError> {
-    match spec {
-        atom!("xfx") => Ok(OpDecl::new(OpDesc::build_with(prec, XFX as u8), name)),
-        atom!("xfy") => Ok(OpDecl::new(OpDesc::build_with(prec, XFY as u8), name)),
-        atom!("yfx") => Ok(OpDecl::new(OpDesc::build_with(prec, YFX as u8), name)),
-        atom!("fx") => Ok(OpDecl::new(OpDesc::build_with(prec, FX as u8), name)),
-        atom!("fy") => Ok(OpDecl::new(OpDesc::build_with(prec, FY as u8), name)),
-        atom!("xf") => Ok(OpDecl::new(OpDesc::build_with(prec, XF as u8), name)),
-        atom!("yf") => Ok(OpDecl::new(OpDesc::build_with(prec, YF as u8), name)),
-        _ => Err(CompilationError::InconsistentEntry),
-    }
+pub(crate) fn to_op_decl_spec(spec: Atom) -> Result<OpDeclSpec, CompilationError> {
+    OpDeclSpec::try_from(spec).map_err(|_err| {
+        CompilationError::InvalidDirective(DirectiveError::InvalidOpDeclSpecValue(spec))
+    })
 }
 
 fn setup_op_decl(term: &FocusedHeapRefMut) -> Result<OpDecl, CompilationError> {
     let (focus, _cell) = subterm_index(term.heap, term.focus);
 
     let name = match term_predicate_key(term.heap, focus+3) {
-        Some((name, _)) => name,
-        None => return Err(CompilationError::InconsistentEntry),
+        Some((name, 0)) => name,
+        _ => {
+            return Err(CompilationError::InvalidDirective(
+                DirectiveError::InvalidOpDeclNameType(term.heap[focus+3]),
+            ));
+        }
     };
 
     let spec = match term_predicate_key(term.heap, focus+2) {
         Some((name, _)) => name,
-        None => return Err(CompilationError::InconsistentEntry),
+        None => {
+            return Err(CompilationError::InvalidDirective(
+                DirectiveError::InvalidOpDeclSpecDomain(term.heap[focus+2]),
+            ));
+        }
     };
 
-    let prec = read_heap_cell!(term.deref_loc(focus+1),
+    let spec = to_op_decl_spec(spec)?;
+    let prec = term.deref_loc(focus+1);
+
+    let prec = read_heap_cell!(prec,
         (HeapCellValueTag::Fixnum, n) => {
             match u16::try_from(n.get_num()) {
                 Ok(n) if n <= 1200 => n,
-                _ => return Err(CompilationError::InconsistentEntry),
+                _ => {
+                    return Err(CompilationError::InvalidDirective(
+                        DirectiveError::InvalidOpDeclPrecDomain(n),
+                    ));
+                }
             }
         }
         _ => {
-            return Err(CompilationError::InconsistentEntry);
+            return Err(CompilationError::InvalidDirective(
+                DirectiveError::InvalidOpDeclPrecType(prec),
+            ));
         }
     );
 
-    to_op_decl(prec, spec, name)
+    if name == "[]" || name == "{}" {
+        return Err(CompilationError::InvalidDirective(
+            DirectiveError::ShallNotCreate(name),
+        ));
+    }
+
+    if name == "," {
+        return Err(CompilationError::InvalidDirective(
+            DirectiveError::ShallNotModify(name),
+        ));
+    }
+
+    if name == "|" && (prec < 1001 || !spec.is_infix()) {
+        return Err(CompilationError::InvalidDirective(
+            DirectiveError::ShallNotCreate(name),
+        ));
+    }
+
+    Ok(to_op_decl(prec, spec, name))
 }
 
 fn setup_predicate_indicator(term: &FocusedHeapRefMut) -> Result<PredicateKey, CompilationError> {
@@ -361,7 +392,9 @@ pub(super) fn setup_declaration<'a, LS: LoadState<'a>>(
     let machine_st = LS::machine_st(&mut loader.payload);
 
     loop {
-        read_heap_cell!(machine_st.heap[focus],
+        let decl = machine_st.heap[focus];
+
+        read_heap_cell!(decl,
             (HeapCellValueTag::Atom, (name, arity)) => {
                 let mut focused = FocusedHeapRefMut::from(&mut machine_st.heap, focus);
 
@@ -391,7 +424,11 @@ pub(super) fn setup_declaration<'a, LS: LoadState<'a>>(
                         let (module_name, name, meta_specs) = setup_meta_predicate(term, loader)?;
                         Ok(Declaration::MetaPredicate(module_name, name, meta_specs))
                     }
-                    _ => Err(CompilationError::InconsistentEntry),
+                    _ => {
+                        Err(CompilationError::InvalidDirective(
+                            DirectiveError::InvalidDirective(name, arity),
+                        ))
+                    }
                 };
             }
             (HeapCellValueTag::Str, s) => {
@@ -401,11 +438,15 @@ pub(super) fn setup_declaration<'a, LS: LoadState<'a>>(
                 if focus != h {
                     focus = h;
                 } else {
-                    return Err(CompilationError::InconsistentEntry);
+                    return Err(CompilationError::InvalidDirective(
+                        DirectiveError::ExpectedDirective(machine_st.heap[focus]),
+                    ));
                 }
             }
             _ => {
-                return Err(CompilationError::InconsistentEntry);
+                return Err(CompilationError::InvalidDirective(
+                    DirectiveError::ExpectedDirective(decl),
+                ));
             }
         );
     }

@@ -1,3 +1,5 @@
+#![allow(clippy::new_without_default)] // annotating structs annotated with #[bitfield] doesn't work
+
 use crate::parser::ast::*;
 
 use crate::arena::*;
@@ -156,13 +158,6 @@ impl From<CodeIndex> for UntypedArenaPtr {
     #[inline(always)]
     fn from(ptr: CodeIndex) -> UntypedArenaPtr {
         UntypedArenaPtr::build_with(ptr.0.as_ptr() as usize)
-    }
-}
-
-impl From<UntypedArenaPtr> for CodeIndex {
-    #[inline(always)]
-    fn from(ptr: UntypedArenaPtr) -> CodeIndex {
-        CodeIndex(TypedArenaPtr::new(ptr.get_ptr() as *mut IndexPtr))
     }
 }
 
@@ -387,10 +382,10 @@ impl IndexStore {
         key: &PredicateKey,
     ) -> Option<PredicateSkeleton> {
         match compilation_target {
-            CompilationTarget::User => self.extensible_predicates.remove(key),
+            CompilationTarget::User => self.extensible_predicates.swap_remove(key),
             CompilationTarget::Module(ref module_name) => {
                 if let Some(module) = self.modules.get_mut(module_name) {
-                    module.extensible_predicates.remove(key)
+                    module.extensible_predicates.swap_remove(key)
                 } else {
                     None
                 }

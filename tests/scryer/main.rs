@@ -14,11 +14,15 @@ mod src_tests;
 /// then check that the changes are as expected e.g. by looking at the `git diff`
 #[test]
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-#[cfg_attr(miri, ignore = "blocked on crossbeam UB")]
+#[cfg_attr(
+    miri,
+    ignore = "miri isolation, unsupported operation: can't call foreign function"
+)]
 fn cli_tests() {
     trycmd::TestCases::new()
         .default_bin_name("scryer-prolog")
         .case("tests/scryer/cli/issues/*.toml")
         .skip("tests/scryer/cli/issues/singleton_warning.toml") // wrong line number
-        .case("tests/scryer/cli/src_tests/*.toml");
+        .case("tests/scryer/cli/src_tests/*.toml")
+        .case("tests/scryer/cli/src_tests/*.md");
 }
